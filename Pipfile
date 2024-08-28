@@ -1,0 +1,18 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+python-dotenv = "*"
+smart-open = "*"
+sentence_transformers ="*"
+numpy= "==1.26"
+boto3 = "*"
+
+[dev-packages]
+jupyter ="*"
+ipykernel = "*"
+
+[requires]
+python_version = "3.11"
