@@ -7,7 +7,9 @@ This repository offers tools for embedding texts in multiple languages with an e
 - **Efficient Storage Management:** Minimal local storage is required as necessary data for each year of a newspaper are downloaded on-the-fly and truncated after uploading.
 - **Parallel Processing:** Processes run in parallel to optimize throughput.
 - **Selective Processing:** Only the necessary processing steps are executed, ensuring efficiency by not reprocessing existing outputs on S3.
-- **S3 Integration:** Integration with S3 for storing and resuming processing. The system ensures no overwriting of files or partial uploads due to interruptions.
+- **S3 Integration:** Integration with S3 for storing and resuming processing. The
+  system ensures no overwriting of files or partial uploads due to interruptions. It is
+  also posssible to run everything locally without S3.
 - **Custom Embedding Options:** Flexible configurations via normal environment variables or make variables, including the ability to specify model versions and filter text data.
 
 ### Missing Features
@@ -17,7 +19,7 @@ This repository offers tools for embedding texts in multiple languages with an e
 - Installing specialized xformer implementation for sparse attention inference is not yet
   imlemented. This shoulld be added in a future release for faster inference.
 
-### Concepts
+## Concepts
 
 ### Storage Locations
 
@@ -29,8 +31,9 @@ This repository offers tools for embedding texts in multiple languages with an e
 
 To manage dependencies, local file stamps are used:
 
-- **Input Stamps (`.stamp`):** Indicate the status of input files.
-- **Output Stamps (`.done`):** Indicate the completion of output files.
+- **Input Stamps (`.stamp`):** Indicate the status of input files on S3.
+- **Output Stamps (no extension or `.done`):** Indicate the completion status of output
+  files on S3. Make uses these to determine if a file needs to be processed or not.
 
 Local stamps help `make` determine which files need to be processed or skipped. The helper script `lib/sync_s3_filestamps.py` manages these stamps by syncing them with S3.
 
@@ -56,7 +59,55 @@ BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
    cd impresso-text-embedder
    ```
 
-Copy the `dotenv.sample` file to `.env` and modify the .env file to set the `AWS_ACCESS_KEY_ID` and `AWS_SECRET`.
+2. **Configure AWS Credentials:**
+   Copy the `dotenv.sample` file to `.env`. Modify the `.env` file to include your AWS credentials:
+
+   ```plaintext
+   AWS_ACCESS_KEY_ID=<your-access-key>
+   AWS_SECRET=<your-secret-key>
+   ```
+
+3. **Install Dependencies:**
+   Ensure `make` and `python3` are installed. Then run:
+
+   ```bash
+   pipenv install
+   ```
+
+4. **Setup Directories and Model:**
+   Create necessary directories and download the Hugging Face model:
+   ```bash
+   make setup
+   ```
+
+## Usage
+
+### Makefile Targets
+
+- **`make setup`**: Sets up the local directories and downloads the Hugging Face model.
+- **`make sync`**: Syncs data from the S3 bucket to the local directory.
+- **`make resync`**: Removes local sync stamps and redoes the synchronization, ensuring a full sync with the remote server.
+- **`make all`**: (Define this if needed)
+- **`make help`**: Displays this help message.
+
+### Running the Embedder
+
+1. **Process Newspapers:**
+   You can specify a list of newspapers to process using the `NEWSPAPER_LIST_FILE`. The default list is generated automatically from the S3 bucket:
+
+   ```bash
+   make newspaper
+   ```
+
+2. **Parallel Processing:**
+   To process newspapers in parallel, use:
+
+   ```bash
+   make each
+   ```
+
+3. **Custom Processing Options:**
+   Adjust processing parameters such as `HF_MODEL_NAME`, `HF_MODEL_VERSION`, and `EMBEDDING_MIN_CHAR_LENGTH` in the `Makefile` to customize the embedding process.
 
 ## About
 
