@@ -18,6 +18,7 @@ import os
 import sys
 import datetime
 from collections import Counter
+import time
 from smart_open import open
 from typing import Any, Dict, Iterator, List, Tuple
 from sentence_transformers import SentenceTransformer
@@ -56,6 +57,7 @@ class TextEmbeddingProcessor:
         )
         self.stats = Counter(valid_texts=0, short_texts=0)
         self.last_timestamp = None  # UTC timestamp of the last processed document
+        self.total_time = 0  # Total time for embedding processing
 
     def run(self) -> None:
         """Orchestrates the file processing based on S3 objects or local files."""
@@ -64,6 +66,12 @@ class TextEmbeddingProcessor:
         embeddings = (self.compute_embeddings(json.loads(line)) for line in lines)
         self.write_embeddings(embeddings)
         log.info(f"File processing completed. {self.stats}")
+
+        if self.stats["valid_texts"] > 0:
+            average_time_per_text = self.total_time / self.stats["valid_texts"]
+            log.info(
+                f"Average time per valid text: {average_time_per_text:.4f} seconds"
+            )
 
         if self.args.s3_output_path and not self.args.s3_output_dry_run:
             self.upload_file_to_s3(self.args.output_path, self.args.s3_output_path)
@@ -96,7 +104,7 @@ class TextEmbeddingProcessor:
         if text and textlen > self.args.min_char_length:
             self.stats["valid_texts"] += 1
             self.stats[f"valid_texts_{data.get('lang')}"] += 1
-
+            start_time = time.time()  # Start timing
             embedding = self.model.encode(
                 text,
                 batch_size=1,
@@ -104,9 +112,12 @@ class TextEmbeddingProcessor:
                 convert_to_numpy=True,
                 normalize_embeddings=False,
             )
-            self.last_timestamp = datetime.datetime.now(datetime.UTC).replace(
-                microsecond=0
-            )
+            end_time = time.time()  # End timing
+            self.total_time += end_time - start_time  # Accumulate processing time
+
+            self.last_timestamp = datetime.datetime.fromtimestamp(
+                end_time, tz=datetime.timezone.utc
+            ).replace(microsecond=0)
 
             if self.stats["valid_texts"] % 100 == 0:
                 log.info(f"Processed {self.stats['valid_texts']} valid texts.")
