@@ -33,7 +33,7 @@ EMBEDDING_MIN_CHAR_LENGTH ?= 800
 # Decomment next line to enable dry-run mode for s3 output (independently of the
 # --s3-output-path setting)
 # EMBEDDING_S3_OUTPUT_DRY_RUN?= --s3-output-dry-run 
-EMBEDDING_S3_OUTPUT_PATH_OPTION ?= 
+EMBEDDING_S3_OUTPUT_DRY_RUN ?= 
   $(call log.info, EMBEDDING_S3_OUTPUT_DRY_RUN)
 
 # Keep only the local timestam output files after uploading (only relevant when
@@ -41,6 +41,9 @@ EMBEDDING_S3_OUTPUT_PATH_OPTION ?=
 
 EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION ?= --keep-timestamp-only
 #EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION ?= 
+
+# double check if the output file exists in s3 and quit if it does
+EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS ?= --quit-if-s3-output-exists
 
 MAKE_PARALLEL_OPTION ?= --jobs 4
 
@@ -50,6 +53,8 @@ HF_HOME?=./hf.d
 
 BUILD_DIR ?= build.d
 
+# the newspaper to process, can also be actionfem/actionfem-1933  ... just a prefix into
+# s3 is ok!
 NEWSPAPER_FILTER ?= actionfem
 
 # The input bucket
@@ -186,6 +191,8 @@ $(OUT_LOCAL_PATH)/%.jsonl.bz2: $(IN_LOCAL_PATH)/%.jsonl.bz2.stamp
 	  --input-path $(call local_to_s3,$<,.stamp) \
 	  --output-path $@ \
 	  --s3-output-path $(call local_to_s3,$@) \
+	  $(EMBEDDING_S3_OUTPUT_DRY_RUN) \
+	  $(EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS) \
 	  $(EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION) \
 	  2> >( tee $@.log >&2 )
 
