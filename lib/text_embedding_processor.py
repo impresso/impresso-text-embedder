@@ -21,7 +21,7 @@ import datetime
 from collections import Counter
 import time
 from smart_open import open
-from typing import Any, Dict, Iterator, Tuple, Generator
+from typing import Any, Dict, Iterator, Tuple, Generator, List
 from sentence_transformers import SentenceTransformer
 
 import boto3
@@ -61,11 +61,13 @@ class TextEmbeddingProcessor:
     def run(self) -> None:
         """Orchestrates the file processing based on S3 objects or local files."""
 
-        log.info("Starting file processing...")
+        log.info("Processing file %s", self.args.input_path)
         lines = self.read_lines(self.args.input_path)
         embeddings = (self.compute_embeddings(json.loads(line)) for line in lines)
         self.write_embeddings(embeddings)
-        log.info(f"File processing completed. {self.stats}")
+        log.info("Processing %s completed.", self.args.input_path)
+        for k in self.stats:
+            log.info("Statistics: %s: %s", k, self.stats[k])
 
         if self.stats["valid_texts"] > 0:
             average_time_per_text = self.stats["total_time"] / self.stats["valid_texts"]
@@ -93,7 +95,7 @@ class TextEmbeddingProcessor:
         log.info("Model loaded.")
         return m
 
-    def read_lines(self, input_path: str) -> Generator[str, None, None]:
+    def read_lines(self, input_path: str) -> Generator[str, None, None] | List[str]:
         """Reads lines from a file, either from S3 or locally, based on the file path."""
         if input_path.startswith("s3://"):
             bucket_name, prefix = self.parse_s3_path(input_path)
@@ -101,9 +103,11 @@ class TextEmbeddingProcessor:
             obj = bucket.Object(prefix)
             log.info("Reading from S3: %s", input_path)
             with bz2.open(obj.get()["Body"], "rt") as infile:
-                for line in infile:
-                    yield line
-            log.info("Finished reading from S3: %s", input_path)
+                lines = infile.readlines()
+                log.info(
+                    "Finished reading %s lines from S3: %s", len(lines), input_path
+                )
+                return lines
         else:
             with open(input_path, "rt") as infile:
                 for line in infile:
