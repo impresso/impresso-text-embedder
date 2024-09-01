@@ -343,13 +343,14 @@ if __name__ == "__main__":
         )
 
     # if the output path exists and the option --no-overwrite is set, exit  with a warning
+
     if (
-        arguments.outpath
+        arguments.output_path
         and arguments.no_overwrite
-        and os.path.exists(arguments.outpath)
+        and os.path.exists(arguments.output_path)
     ):
         log.warning(
-            f"Output path {arguments.outpath} exists and --no-overwrite is set."
+            f"Output path {arguments.output_path} exists and --no-overwrite is set."
         )
         sys.exit(0)
     try:
