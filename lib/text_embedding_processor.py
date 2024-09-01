@@ -80,11 +80,18 @@ class TextEmbeddingProcessor:
                 self.keep_timestamp_only(self.args.output_path)
 
     def load_model(self):
-        return SentenceTransformer(
+        log.info(
+            "Loading SentenceTransformer model...%s@%s",
+            self.args.model_name,
+            self.args.model_revision,
+        )
+        m = SentenceTransformer(
             self.args.model_name,
             trust_remote_code=True,
             revision=self.args.model_revision,
         )
+        log.info("Model loaded.")
+        return m
 
     def read_lines(self, input_path: str) -> Generator[str, None, None]:
         """Reads lines from a file, either from S3 or locally, based on the file path."""
