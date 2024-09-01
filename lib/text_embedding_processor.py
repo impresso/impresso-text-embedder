@@ -41,6 +41,7 @@ class TextEmbeddingProcessor:
         """Initializes the file processor with command-line arguments and sets up the embedding model."""
         load_dotenv()
         self.args = args
+        self.s3_resource = None
 
         if self.args.input_path.startswith("s3://") or self.args.s3_output_path:
             self.s3_resource = self.get_s3_resource()
@@ -82,9 +83,10 @@ class TextEmbeddingProcessor:
 
     def read_lines(self, input_path: str) -> Generator[str, None, None]:
         """Reads lines from a file, either from S3 or locally, based on the file path."""
-        if self.is_s3_path:
-            bucket = self.s3_resource.Bucket(self.bucket_name)
-            obj = bucket.Object(self.input_path)
+        if input_path.startswith("s3://"):
+            bucket_name, prefix = self.parse_s3_path(input_path)
+            bucket = self.s3_resource.Bucket(bucket_name)
+            obj = bucket.Object(prefix)
             with bz2.open(obj.get()["Body"], "rt") as infile:
                 for line in infile:
                     yield line
