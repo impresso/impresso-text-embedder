@@ -99,9 +99,11 @@ class TextEmbeddingProcessor:
             bucket_name, prefix = self.parse_s3_path(input_path)
             bucket = self.s3_resource.Bucket(bucket_name)
             obj = bucket.Object(prefix)
+            log.info("Reading from S3: %s", input_path)
             with bz2.open(obj.get()["Body"], "rt") as infile:
                 for line in infile:
                     yield line
+            log.info("Finished reading from S3: %s", input_path)
         else:
             with open(input_path, "rt") as infile:
                 for line in infile:
