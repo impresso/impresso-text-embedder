@@ -172,7 +172,7 @@ class TextEmbeddingProcessor:
 
             result["embedding"] = [round(n, 5) for n in embedding.tolist()]
 
-            log.info(f"Computed embedding for ID: {result.get('id')}")
+            log.debug(f"Computed embedding for ID: {result.get('id')}")
             return result
         else:
             self.stats["short_texts"] += 1
