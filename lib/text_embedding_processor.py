@@ -64,8 +64,20 @@ class TextEmbeddingProcessor:
         log.info("Processing file %s", self.args.input_path)
         lines = self.read_lines(self.args.input_path)
         embeddings = (self.compute_embeddings(json.loads(line)) for line in lines)
+        log.info("Type of embeddings: %s", type(embeddings))
         self.write_embeddings(embeddings)
         log.info("Processing %s completed.", self.args.input_path)
+
+        if self.args.s3_output_path and not self.args.s3_output_dry_run:
+            self.upload_file_to_s3(self.args.output_path, self.args.s3_output_path)
+
+            if self.args.keep_timestamp_only:
+                self.keep_timestamp_only(self.args.output_path)
+
+        self.log_statistics()
+
+    def log_statistics(self):
+        """Logs the statistics and calculates the average time per valid text."""
         for k in self.stats:
             log.info("Statistics: %s: %s", k, self.stats[k])
 
@@ -74,12 +86,6 @@ class TextEmbeddingProcessor:
             log.info(
                 f"Average time per valid text: {average_time_per_text:.4f} seconds"
             )
-
-        if self.args.s3_output_path and not self.args.s3_output_dry_run:
-            self.upload_file_to_s3(self.args.output_path, self.args.s3_output_path)
-
-            if self.args.keep_timestamp_only:
-                self.keep_timestamp_only(self.args.output_path)
 
     def load_model(self):
         log.info(
@@ -110,19 +116,22 @@ class TextEmbeddingProcessor:
                 return lines
         else:
             with open(input_path, "rt") as infile:
-                for line in infile:
-                    yield line
+                return (line for line in infile)
 
-    def compute_embeddings(self, data: JSONType) -> JSONType:
+    def compute_embeddings(self, data: JSONType) -> JSONType | None:
         """Computes embeddings for the text in the JSON data."""
+
         content_item_type = data.get("tp")
         embedder = self.args.model_name + "@" + self.args.model_revision
+
         if content_item_type not in self.args.content_type:
             self.stats[f"skipped_type_{content_item_type}"] += 1
             return None
+
         if self.model is None:
             # some newspapers do not contain any valid text, therefore avoiding to load the model if not needed
             self.model = self.load_model()
+        log.debug(f"Computing embedding for ID: {data.get('id')}")
         text = data.get("ft", "")
         textlen = len(text)
         if text and textlen > self.args.min_char_length:
@@ -140,7 +149,9 @@ class TextEmbeddingProcessor:
                 normalize_embeddings=False,
             )
             end_time = time.time()  # End timing
-            self.total_time += end_time - start_time  # Accumulate processing time
+            self.stats["total_time"] += (
+                end_time - start_time
+            )  # Accumulate processing time
 
             self.last_timestamp = datetime.datetime.fromtimestamp(
                 end_time, tz=datetime.timezone.utc
@@ -148,6 +159,7 @@ class TextEmbeddingProcessor:
 
             if self.stats["valid_texts"] % 100 == 0:
                 log.info(f"Processed {self.stats['valid_texts']} valid texts.")
+
             result = {
                 "id": data.get("id"),
                 "ts": self.last_timestamp.isoformat() + "Z",
@@ -157,9 +169,10 @@ class TextEmbeddingProcessor:
 
             if self.args.include_text:
                 result["text"] = text
-            result["embedding"] = [round(n, 5) for n in embedding.tolist()]
-            #
 
+            result["embedding"] = [round(n, 5) for n in embedding.tolist()]
+
+            log.info(f"Computed embedding for ID: {result.get('id')}")
             return result
         else:
             self.stats["short_texts"] += 1
@@ -172,8 +185,10 @@ class TextEmbeddingProcessor:
         os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
         with open(output_file_path, "w", encoding="utf-8") as outfile:
             for embedding in embeddings:
+
                 if not embedding:
                     continue
+                log.debug("Writing embedding: %s", embedding.get("id"))
                 outfile.write(
                     json.dumps(
                         embedding,
@@ -206,6 +221,7 @@ class TextEmbeddingProcessor:
             return
 
         try:
+            log.info(f"Uploading {local_file_path} to s3://{bucket}/{key}")
             self.s3_resource.Bucket(bucket).upload_file(local_file_path, key)
             log.info(f"Successfully uploaded {local_file_path} to s3://{bucket}/{key}")
         except FileNotFoundError:
