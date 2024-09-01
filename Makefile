@@ -7,6 +7,9 @@ export SHELLOPTS:=errexit:pipefail
 # Default target when no target is specified
 .DEFAULT_GOAL := help
 
+# Load local config if it exists
+-include config.local.mk
+
 # Include the logging functions and set the logging level: DEBUG, INFO, WARNING, ERROR
 LOGGING_LEVEL ?= INFO
 include lib/log.mk
