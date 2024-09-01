@@ -1,3 +1,4 @@
 *.d/*
 .env
 .idea
+config.local.mk
