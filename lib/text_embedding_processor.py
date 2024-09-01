@@ -54,9 +54,7 @@ class TextEmbeddingProcessor:
                     " as requested by the option --quit-if-s3-output-exists."
                 )
                 sys.exit(0)
-        self.model = SentenceTransformer(
-            args.model_name, trust_remote_code=True, revision=self.args.model_revision
-        )
+        self.model = None
         self.stats = Counter(valid_texts=0, short_texts=0, total_time=0)
         self.last_timestamp = None  # UTC timestamp of the last processed document
 
@@ -81,6 +79,13 @@ class TextEmbeddingProcessor:
             if self.args.keep_timestamp_only:
                 self.keep_timestamp_only(self.args.output_path)
 
+    def load_model(self):
+        return SentenceTransformer(
+            self.args.model_name,
+            trust_remote_code=True,
+            revision=self.args.model_revision,
+        )
+
     def read_lines(self, input_path: str) -> Generator[str, None, None]:
         """Reads lines from a file, either from S3 or locally, based on the file path."""
         if input_path.startswith("s3://"):
@@ -102,6 +107,8 @@ class TextEmbeddingProcessor:
         if content_item_type not in self.args.content_type:
             self.stats[f"skipped_type_{content_item_type}"] += 1
             return None
+        if self.model is None:
+            self.model = self.load_model()
         text = data.get("ft", "")
         textlen = len(text)
         if text and textlen > self.args.min_char_length:
