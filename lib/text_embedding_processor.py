@@ -78,7 +78,7 @@ class TextEmbeddingProcessor:
 
     def log_statistics(self):
         """Logs the statistics and calculates the average time per valid text."""
-        for k in self.stats:
+        for k in sorted(self.stats):
             log.info("Statistics: %s: %s", k, self.stats[k])
 
         if self.stats["valid_texts"] > 0:
