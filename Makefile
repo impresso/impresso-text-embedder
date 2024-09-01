@@ -30,8 +30,11 @@ EMBEDDING_INCLUDE_TEXT_OPTION ?=
 EMBEDDING_MIN_CHAR_LENGTH ?= 800
 
 # UPLOAD OPTION
-EMBEDDING_S3_OUTPUT_PATH_OPTION ?= --s3-output-path $(call local_to_s3,$@)
-#EMBEDDING_S3_OUTPUT_PATH_OPTION ?= 
+# Decomment next line to enable dry-run mode for s3 output (independently of the
+# --s3-output-path setting)
+# EMBEDDING_S3_OUTPUT_DRY_RUN?= --s3-output-dry-run 
+EMBEDDING_S3_OUTPUT_PATH_OPTION ?= 
+  $(call log.info, EMBEDDING_S3_OUTPUT_DRY_RUN)
 
 # Keep only the local timestam output files after uploading (only relevant when
 # uploading to s3)
@@ -81,7 +84,7 @@ help:
 	@echo "  setup: Create the local directories and setup the HF model"
 	@echo "  sync: Sync the data from the S3 bucket to the local directory"
 	@echo "  resync: Remove the local synchronization file stamp and redoes everything, ensuring a full sync with the remote server."
-	@echo "  all: "
+	@echo "  newspaper: Process the text embeddings for the given newspaper"
 	@echo "  help: Show this help message"
 
 
@@ -114,8 +117,9 @@ last-synced-stamp-files += $(BUILD_DIR)/$(IN_S3_BUCKET)/$(NEWSPAPER_FILTER).last
 
 last-synced-output-files += $(OUT_LOCAL_PATH).last_synced
   $(call log.info, last-synced-output-files)
-
-sync: $(last-synced-stamp-files) $(last-synced-output-files)
+sync: sync-input sync-output
+sync-input: $(last-synced-stamp-files) 
+sync-output: $(last-synced-output-files)
 
 # Remove the local synchronization file stamp and redoes everything, ensuring a full sync with the remote server.
 resync: clean-sync
@@ -181,7 +185,8 @@ $(OUT_LOCAL_PATH)/%.jsonl.bz2: $(IN_LOCAL_PATH)/%.jsonl.bz2.stamp
 	  --model-revision $(HF_MODEL_VERSION) \
 	  --input-path $(call local_to_s3,$<,.stamp) \
 	  --output-path $@ \
-	  $(EMBEDDING_S3_OUTPUT_PATH_OPTION) $(EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION) \
+	  --s3-output-path $(call local_to_s3,$@) \
+	  $(EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION) \
 	  2> >( tee $@.log >&2 )
 
 

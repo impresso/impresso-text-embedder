@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python
 
 """
 This module, `text_embedding_processor.py`, is a utility for processing bzip2 compressed JSONL
@@ -65,7 +65,7 @@ class TextEmbeddingProcessor:
         self.write_embeddings(embeddings)
         log.info(f"File processing completed. {self.stats}")
 
-        if self.args.s3_output_path:
+        if self.args.s3_output_path and not self.args.s3_output_dry_run:
             self.upload_file_to_s3(self.args.output_path, self.args.s3_output_path)
 
             if self.args.keep_timestamp_only:
@@ -241,10 +241,27 @@ if __name__ == "__main__":
     )
     parser.add_argument("--output-path", help="Output file path", required=True)
     parser.add_argument(
+        "--no-overwrite",
+        action="store_true",
+        help=(
+            "Do not overwrite output file if it exists, no processing is done. No error"
+            " is raised, only a warning is logged! This prevents accidental overwrite"
+            " or recomputation if a local stamp exists. Defaults: %(default)s"
+        ),
+    )
+    parser.add_argument(
         "--s3-output-path",
         help=(
             "Upload local output file to corresponding s3 bucket after processing. If"
             " this value is set to  locally. Defaults: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--s3-output-dry-run",
+        action="store_true",
+        help=(
+            "Do not upload local output file to corresponding s3 bucket. Even if"
+            " --s3-output-path is set.sDefaults: %(default)s"
         ),
     )
     parser.add_argument(
@@ -325,6 +342,16 @@ if __name__ == "__main__":
             " option --s3-output-path set. Option --keep-timestamp-only is ignored."
         )
 
+    # if the output path exists and the option --no-overwrite is set, exit  with a warning
+    if (
+        arguments.outpath
+        and arguments.no_overwrite
+        and os.path.exists(arguments.outpath)
+    ):
+        log.warning(
+            f"Output path {arguments.outpath} exists and --no-overwrite is set."
+        )
+        sys.exit(0)
     try:
         processor = TextEmbeddingProcessor(arguments)
         processor.run()
