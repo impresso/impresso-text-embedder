@@ -108,6 +108,7 @@ class TextEmbeddingProcessor:
             self.stats[f"skipped_type_{content_item_type}"] += 1
             return None
         if self.model is None:
+            # some newspapers do not contain any valid text, therefore avoiding to load the model if not needed
             self.model = self.load_model()
         text = data.get("ft", "")
         textlen = len(text)
