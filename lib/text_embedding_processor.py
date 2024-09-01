@@ -15,12 +15,13 @@ import json
 import random
 import logging
 import os
+from math import ceil
 import sys
 import datetime
 from collections import Counter
 import time
 from smart_open import open
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, Tuple, Generator
 from sentence_transformers import SentenceTransformer
 
 import boto3
@@ -40,27 +41,27 @@ class TextEmbeddingProcessor:
         """Initializes the file processor with command-line arguments and sets up the embedding model."""
         load_dotenv()
         self.args = args
-        self.is_s3_path = args.input_path.startswith("s3://")
 
-        if self.is_s3_path:
-            s3_bucket_path = args.input_path[5:].split("/", 1)
-            self.bucket_name = s3_bucket_path[0]
-            self.input_path = s3_bucket_path[1] if len(s3_bucket_path) > 1 else ""
+        if self.args.input_path.startswith("s3://") or self.args.s3_output_path:
             self.s3_resource = self.get_s3_resource()
-        else:
-            self.bucket_name = None
-            self.input_path = args.input_path
-            self.s3_resource = None
 
+        if self.args.s3_output_path and self.args.quit_if_s3_output_exists:
+            bucket, key = self.parse_s3_path(self.args.s3_output_path)
+            if self.file_exists_in_s3(bucket, key):
+                log.warning(
+                    f"The file s3://{bucket}/{key} already exists. Silently quitting,"
+                    " as requested by the option --quit-if-s3-output-exists."
+                )
+                sys.exit(0)
         self.model = SentenceTransformer(
             args.model_name, trust_remote_code=True, revision=self.args.model_revision
         )
-        self.stats = Counter(valid_texts=0, short_texts=0)
+        self.stats = Counter(valid_texts=0, short_texts=0, total_time=0)
         self.last_timestamp = None  # UTC timestamp of the last processed document
-        self.total_time = 0  # Total time for embedding processing
 
     def run(self) -> None:
         """Orchestrates the file processing based on S3 objects or local files."""
+
         log.info("Starting file processing...")
         lines = self.read_lines(self.args.input_path)
         embeddings = (self.compute_embeddings(json.loads(line)) for line in lines)
@@ -68,7 +69,7 @@ class TextEmbeddingProcessor:
         log.info(f"File processing completed. {self.stats}")
 
         if self.stats["valid_texts"] > 0:
-            average_time_per_text = self.total_time / self.stats["valid_texts"]
+            average_time_per_text = self.stats["total_time"] / self.stats["valid_texts"]
             log.info(
                 f"Average time per valid text: {average_time_per_text:.4f} seconds"
             )
@@ -79,18 +80,18 @@ class TextEmbeddingProcessor:
             if self.args.keep_timestamp_only:
                 self.keep_timestamp_only(self.args.output_path)
 
-    def read_lines(self, input_path: str) -> List[str]:
+    def read_lines(self, input_path: str) -> Generator[str, None, None]:
         """Reads lines from a file, either from S3 or locally, based on the file path."""
-        lines = []
         if self.is_s3_path:
             bucket = self.s3_resource.Bucket(self.bucket_name)
             obj = bucket.Object(self.input_path)
             with bz2.open(obj.get()["Body"], "rt") as infile:
-                lines = infile.readlines()
+                for line in infile:
+                    yield line
         else:
-            with bz2.open(input_path, "rt") as infile:
-                lines = infile.readlines()
-        return lines
+            with open(input_path, "rt") as infile:
+                for line in infile:
+                    yield line
 
     def compute_embeddings(self, data: JSONType) -> JSONType:
         """Computes embeddings for the text in the JSON data."""
@@ -102,8 +103,11 @@ class TextEmbeddingProcessor:
         text = data.get("ft", "")
         textlen = len(text)
         if text and textlen > self.args.min_char_length:
+
+            self.stats[f"char_count_bucket_5k:{ceil(textlen / 5000) * 5000}"] += 1
+
             self.stats["valid_texts"] += 1
-            self.stats[f"valid_texts_{data.get('lang')}"] += 1
+            self.stats[f"valid_texts_lg:{data.get('lang')}"] += 1
             start_time = time.time()  # Start timing
             embedding = self.model.encode(
                 text,
@@ -276,6 +280,11 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--quit-if-s3-output-exists",
+        action="store_true",
+        help="Quit if the output file already exists in S3. Defaults: %(default)s",
+    )
+    parser.add_argument(
         "--keep-timestamp-only",
         action="store_true",
         help=(
@@ -352,9 +361,13 @@ if __name__ == "__main__":
             "Will not replace output files with time stamp without S3 output path"
             " option --s3-output-path set. Option --keep-timestamp-only is ignored."
         )
-
-    # if the output path exists and the option --no-overwrite is set, exit  with a warning
-
+    if (
+        arguments.quit_if_s3_output_exists and not arguments.s3_output_path
+    ):  # pragma: no cover
+        log.warning(
+            "Option --quit-if-s3-output-exists is ignored without S3 output path"
+            " option --s3-output-path set."
+        )
     if (
         arguments.output_path
         and arguments.no_overwrite
