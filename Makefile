@@ -166,8 +166,8 @@ newspaper: textembedding-target
 #
 each:
 	for NEWSPAPER_FILTER in $(file < $(NEWSPAPERS_TO_PROCESS_FILE)) ; do \
-		$(MAKE) NEWSPAPER_FILTER=$$NEWSPAPER_FILTER resync  ; \
-		$(MAKE) $(MAKE_PARALLEL_OPTION) NEWSPAPER_FILTER=$$NEWSPAPER_FILTER newspaper  ; \
+		$(MAKE) NEWSPAPER=$$NEWSPAPER_FILTER resync  ; \
+		$(MAKE) $(MAKE_PARALLEL_OPTION) NEWSPAPER=$$NEWSPAPER_FILTER newspaper  ; \
 	done
 
 setup:
