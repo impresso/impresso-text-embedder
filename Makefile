@@ -107,6 +107,13 @@ EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS ?= --quit-if-s3-output-exists
   $(call log.info, EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS)
 
 
+# When determining the order of years of a newspaper to process, order them by recency
+# (default or order them randomly? By recency, larger newer years are processed first,
+# avoiding waiting for the most recent years to be processed). By random order,
+# recomputations by different machines working on the dataset are less likely to happen.
+RANDOM_NEWSPAPER_YEAR_SORTING ?= |shuf
+  $(call log.info, RANDOM_NEWSPAPER_YEAR_SORTING)
+
 
 # DEFINING THE REQUIRED INPUT PATHS
 
@@ -245,7 +252,7 @@ $(OUT_LOCAL_PATH_PROCESSED_DATA).last_synced:
 
 # variable for all locally available rebuilt stamp files. Needed for dependency tracking
 # of the build process
-local-rebuilt-stamp-files := $(shell ls -r $(IN_LOCAL_PATH_REBUILT)/*.jsonl.bz2.stamp)
+local-rebuilt-stamp-files := $(shell ls -r $(IN_LOCAL_PATH_REBUILT)/*.jsonl.bz2.stamp $(RANDOM_NEWSPAPER_YEAR_SORTING))
   $(call log.info, local-rebuilt-stamp-files)
 
 define local_rebuilt_stamp_to_local_textembedding_file
