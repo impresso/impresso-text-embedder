@@ -1,6 +1,11 @@
 # Sample file for local configurations. Copy this file to config.local.mk and it will be
 # included by the main Makefile.
 
+# inform the user about this configuratio!
+$(info Make: Including config.local.mk: $(shell readlink -f config.local.mk))
+
+
+
 # Typical adaptations
 # if NAME is already set to a non-empty value, it will not be overwritten!
 # NAME ?= VALUE
@@ -36,3 +41,6 @@ MAKE_PARALLEL_OPTION ?= --jobs 2
 
 # If you want to restrict the newspaper to work on
 NEWSPAPER ?= actionfem
+
+# suppress the logging output of make itself 
+LOGGING_LEVEL := WARNING
