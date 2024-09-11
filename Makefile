@@ -150,11 +150,11 @@ help:
 	@echo "Usage: make [target] [-j <jobs>]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  setup: Create the local directories and store the HF model locally"
-	@echo "  sync: Sync the data from the S3 bucket to the local directory"
-	@echo "  resync: Remove the local synchronization file stamp and redoes everything, ensuring a full sync with the remote server."
-	@echo "  newspaper: Process the text embeddings for a single newspaper specified by the NEWSPAPER variable"
-	@echo "  each: Process the text embeddings for each newspaper found in the file $(NEWSPAPERS_TO_PROCESS_FILE)"
+	@echo "  setup     # Create the local directories and store the HF model locally"
+	@echo "  sync      # Sync the data from the S3 bucket to the local directory"
+	@echo "  resync    # Remove the local synchronization file stamp and redoes everything, ensuring a full sync with the remote server."
+	@echo "  newspaper # Process the text embeddings for a single newspaper specified by the NEWSPAPER variable"
+	@echo "  each      # Process the text embeddings for each newspaper found in the file $(NEWSPAPERS_TO_PROCESS_FILE)"
 	@echo "  help: Show this help message"
 
 
