@@ -30,7 +30,6 @@ include lib/log.mk
 
 # Set the number of parallel embedding jobs to run
 MAKE_PARALLEL_OPTION ?= --jobs 2
-
   $(call log.info, MAKE_PARALLEL_OPTION)
 
 
@@ -154,34 +153,39 @@ help:
 	@echo "  setup: Create the local directories and store the HF model locally"
 	@echo "  sync: Sync the data from the S3 bucket to the local directory"
 	@echo "  resync: Remove the local synchronization file stamp and redoes everything, ensuring a full sync with the remote server."
-	@echo "  newspaper: Process the text embeddings for the newspaper specified by the NEWSPAPER_FILTER variable"
+	@echo "  newspaper: Process the text embeddings for a single newspaper specified by the NEWSPAPER variable"
+	@echo "  each: Process the text embeddings for each newspaper found in the file $(NEWSPAPERS_TO_PROCESS_FILE)"
 	@echo "  help: Show this help message"
 
 
 .PHONY: all  help
 
-
+# Process a single newspaper
 newspaper: textembedding-target
 
-#
+# Process the text embeddings for each newspaper
 each:
 	for NEWSPAPER_FILTER in $(file < $(NEWSPAPERS_TO_PROCESS_FILE)) ; do \
 		$(MAKE) NEWSPAPER=$$NEWSPAPER_FILTER resync  ; \
 		$(MAKE) $(MAKE_PARALLEL_OPTION) NEWSPAPER=$$NEWSPAPER_FILTER newspaper  ; \
 	done
 
+# 
 setup:
-	# WARNING currently you need to install the dependencies manually
+	# WARNING currently you need to install the dependencies manually BEFORE running
+	# this target
+	# SEE README.md
 	# ON GPU: you need to pip install the torch version that fits your cuda version
 	# SEE: https://pytorch.org/get-started/locally/
-	# pipenv install
 	# Create the local directory
 	mkdir -p $(IN_LOCAL_PATH_REBUILT)
 	mkdir -p $(OUT_LOCAL_PATH_PROCESSED_DATA)
+	# Make sure that the 
 	$(MAKE) setup-hf-model
+	$(MAKE) newspapers-to-process-target
 
 setup-hf-model:
-	pipenv run python -c "from sentence_transformers import SentenceTransformer as st; \
+	python3 -c "from sentence_transformers import SentenceTransformer as st; \
 	m = st('$(HF_FULL_MODEL_NAME)', revision='$(HF_MODEL_VERSION)',trust_remote_code=True); \
 	len(m.encode('This is a test!')) or exit(1)"
 
