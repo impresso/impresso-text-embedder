@@ -59,22 +59,34 @@ BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
    cd impresso-text-embedder
    ```
 
-2. **Configure AWS Credentials:**
+2. **Configure S3 Credentials:**
    Copy the `dotenv.sample` file to `.env`. Modify the `.env` file to include your AWS credentials:
 
    ```plaintext
-   AWS_ACCESS_KEY_ID=<your-access-key>
-   AWS_SECRET=<your-secret-key>
+   SE_ACCESS_KEY=<your-access-key>
+   SE_SECRET_KEY=<your-secret-key>
+   SE_HOST_URL=<your host name>
    ```
 
 3. **Install Dependencies:**
-   Ensure `make` and `python3` are installed. Then run:
+   Ensure `make` and `python3` and `pip3` are installed. For GPU support of pytorch, go to
+   https://pytorch.org/get-started/locally/ and get your installation command. Run:
 
    ```bash
-   pipenv install
+   pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+   pip3 install -r requirements.txt
+
+   # or pipenv install
    ```
 
-4. **Setup Directories and Model:**
+4. **Setup Environment and make variables**:
+
+   ```bash
+   cp dotenv.sample .env  # edit .env with your S3 credentials
+   cp local.config.sample.mk local.config.mk  # edit local.config.mk with your local settings
+   ```
+
+5. **Setup Directories and Model:**
    Create necessary directories and download the Hugging Face model:
    ```bash
    make setup
@@ -84,11 +96,9 @@ BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
 
 ### Makefile Targets
 
-- **`make setup`**: Sets up the local directories and downloads the Hugging Face model.
-- **`make sync`**: Syncs data from the S3 bucket to the local directory.
-- **`make resync`**: Removes local sync stamps and redoes the synchronization, ensuring a full sync with the remote server.
-- **`make all`**: (Define this if needed)
-- **`make help`**: Displays this help message.
+```bash
+make help
+```
 
 ### Running the Embedder
 
@@ -96,6 +106,7 @@ BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
    You can specify a list of newspapers to process using the `NEWSPAPER_LIST_FILE`. The default list is generated automatically from the S3 bucket:
 
    ```bash
+   make sync
    make newspaper
    ```
 
@@ -105,9 +116,6 @@ BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
    ```bash
    make each
    ```
-
-3. **Custom Processing Options:**
-   Adjust processing parameters such as `HF_MODEL_NAME`, `HF_MODEL_VERSION`, and `EMBEDDING_MIN_CHAR_LENGTH` in the `Makefile` to customize the embedding process.
 
 ## About
 
