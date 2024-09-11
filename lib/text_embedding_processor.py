@@ -348,7 +348,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--content-type",
         help="Content type of the input file",
-        choices=["ar"],
+        choices=["ar", "page"],
         default=["ar"],
         nargs="+",
     )
