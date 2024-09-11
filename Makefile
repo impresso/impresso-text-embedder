@@ -80,6 +80,10 @@ EMBEDDING_INCLUDE_TEXT_OPTION ?=
 EMBEDDING_MIN_CHAR_LENGTH ?= 800
   $(call log.info, EMBEDDING_MIN_CHAR_LENGTH)
 
+# Set the types of content items to embed. The default is to embed articles.
+# Possible types are: ar, page
+EMBEDDING_CONTENT_TYPE_OPTION?= --content-type ar
+  $(call log.info, EMBEDDING_CONTENT_TYPE_OPTION)
 
 # S3 STORAGE UPDATE SETTINGS
 
@@ -279,6 +283,7 @@ $(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2: $(IN_LOCAL_PATH_REBUILT)/%.jsonl.b
 	  $(EMBEDDING_INCLUDE_TEXT_OPTION) \
 	  --model-name $(HF_FULL_MODEL_NAME) \
 	  --model-revision $(HF_MODEL_VERSION) \
+	  $(EMBEDDING_CONTENT_TYPE_OPTION) \
 	  --input-path $(call local_to_s3,$<,.stamp) \
 	  --output-path $@ \
 	  --s3-output-path $(call local_to_s3,$@) \
