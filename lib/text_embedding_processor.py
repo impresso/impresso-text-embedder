@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 
 """
-This module, `text_embedding_processor.py`, is a utility for processing bzip2 compressed JSONL
-files from S3 or local storage. It computes semantic embeddings for each document
+This module, `text_embedding_processor.py`, is a utility for processing bzip2 compressed
+JSONL files from S3 or local storage. It computes semantic embeddings for each document
 and outputs the result as a JSONL file.
 """
 
@@ -35,10 +35,12 @@ JSONType = Dict[str, Any]
 
 
 class TextEmbeddingProcessor:
-    """Processes a bzip2 compressed JSONL file from S3, line by line, and computes embeddings."""
+    """Processes a bzip2 compressed JSONL file from S3, line by line, and computes
+    embeddings."""
 
     def __init__(self, args: Any):
-        """Initializes the file processor with command-line arguments and sets up the embedding model."""
+        """Initializes the file processor with command-line arguments and sets up the
+        embedding model."""
         load_dotenv()
         self.args = args
         self.s3_resource = None
@@ -102,7 +104,8 @@ class TextEmbeddingProcessor:
         return m
 
     def read_lines(self, input_path: str) -> Generator[str, None, None] | List[str]:
-        """Reads lines from a file, either from S3 or locally, based on the file path."""
+        """Reads lines from a file, either from S3 or locally, based on the file
+        path."""
         if input_path.startswith("s3://"):
             bucket_name, prefix = self.parse_s3_path(input_path)
             bucket = self.s3_resource.Bucket(bucket_name)
@@ -129,7 +132,8 @@ class TextEmbeddingProcessor:
             return None
 
         if self.model is None:
-            # some newspapers do not contain any valid text, therefore avoiding to load the model if not needed
+            # some newspapers do not contain any valid text, therefore avoiding to load
+            # the model if not needed
             self.model = self.load_model()
         log.debug(f"Computing embedding for ID: {data.get('id')}")
         text = data.get("ft", "")
@@ -243,7 +247,8 @@ class TextEmbeddingProcessor:
         return path_parts[0], path_parts[1]
 
     def keep_timestamp_only(self, input_path: str, timestamp: datetime = None) -> None:
-        """Truncates the local file to zero length and updates the metadata to the given UTC timestamp."""
+        """Truncates the local file to zero length and updates the metadata to the given
+        UTC timestamp."""
 
         try:
             # Truncate the file to zero length
@@ -269,7 +274,9 @@ class TextEmbeddingProcessor:
             log.error(f"Failed to truncate {input_path}: {e}")
 
     def get_s3_resource(self) -> boto3.resource:
-        """Configures and returns an S3 resource object based on environment variables."""
+        """Configures and returns an S3 resource object based on environment
+        variables."""
+
         access_key = os.getenv("SE_ACCESS_KEY")
         secret_key = os.getenv("SE_SECRET_KEY")
         host_url = os.getenv("SE_HOST_URL", "https://os.zhdk.cloud.switch.ch/")
@@ -348,7 +355,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--content-type",
         help="Content type of the input file",
-        choices=["ar"],
+        choices=["ar", "page"],
         default=["ar"],
         nargs="+",
     )
