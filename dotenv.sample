@@ -1,2 +1,4 @@
+# Save this file as .env or make sure that your environment knows them!
 SE_ACCESS_KEY=<YOUR VALUE>
 SE_SECRET_KEY=<YOUR VALUE>
+SE_HOST=<YOUR VALUE>
