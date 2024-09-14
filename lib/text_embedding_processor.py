@@ -34,6 +34,82 @@ log = logging.getLogger(__name__)
 JSONType = Dict[str, Any]
 
 
+def print_log_message_summary():
+    """Prints a summary of the log messages used in the script and their meanings."""
+    summary = {
+        "info": [
+            "Arguments: {arguments}: Logs the command-line arguments passed.",
+            (
+                "Processing file %s: Indicates the start of file processing for a given"
+                " file path."
+            ),
+            "Type of embeddings: %s: Logs the type of the embeddings object.",
+            "Processed %s valid texts: Logs after every 100 valid texts are processed.",
+            (
+                "Model loaded: Indicates that the embedding model has been successfully"
+                " loaded."
+            ),
+            (
+                "Reading from S3: %s: Indicates that a file is being read from an S3"
+                " bucket."
+            ),
+            (
+                "Finished reading %s lines from S3: %s: Logs after completing reading"
+                " from an S3 file."
+            ),
+            (
+                "Uploading %s to s3://%s/%s: Logs when a file is about to be uploaded"
+                " to S3."
+            ),
+            (
+                "Successfully uploaded %s to s3://%s/%s: Logs a successful file upload"
+                " to S3."
+            ),
+        ],
+        "warning": [
+            (
+                "The file s3://%s/%s already exists. Silently quitting: Warns that a"
+                " file already exists in S3 and the process is exiting."
+            ),
+            (
+                "Output path %s exists and --no-overwrite is set: Warns that the output"
+                " file already exists and --no-overwrite prevents further processing."
+            ),
+        ],
+        "error": [
+            (
+                "The file %s was not found: Logs an error when the file to upload"
+                " cannot be found locally."
+            ),
+            "Credentials not available: Indicates that AWS credentials are missing.",
+            (
+                "S3 output path must start with 's3://': Logs an error when an invalid"
+                " S3 path is provided."
+            ),
+        ],
+        "debug": [
+            (
+                "Computing embedding for ID: {data.get('id')}: Logs that an embedding"
+                " is being computed for a specific document ID."
+            ),
+            (
+                "Writing embedding: %s: Logs when an embedding is being written to the"
+                " output file."
+            ),
+            (
+                "Computed embedding for ID: {result.get('id')}: Logs after the"
+                " embedding for a specific document ID has been computed."
+            ),
+        ],
+    }
+
+    log.info("Log Message Summary:")
+    for level, messages in summary.items():
+        log.info(f"Log Level: {level.upper()}")
+        for message in messages:
+            log.info(f" - {message}")
+
+
 class TextEmbeddingProcessor:
     """Processes a bzip2 compressed JSONL file from S3, line by line, and computes
     embeddings."""
@@ -150,7 +226,7 @@ class TextEmbeddingProcessor:
                 batch_size=1,
                 show_progress_bar=False,
                 convert_to_numpy=True,
-                normalize_embeddings=False,
+                normalize_embeddings=self.args.normalize_embeddings,
             )
             end_time = time.time()  # End timing
             self.stats["total_time"] += (
@@ -365,7 +441,12 @@ if __name__ == "__main__":
         default=400,
         help="Minimum character length of the text to be embedded",
     )
-
+    parser.add_argument(
+        "--normalize-embeddings",
+        action="store_true",
+        default=False,
+        help="Normalize embeddings to unit vectors. Defaults: %(default)s",
+    )
     parser.add_argument(
         "--include-text",
         action="store_true",
