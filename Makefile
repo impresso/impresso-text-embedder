@@ -30,7 +30,7 @@ include lib/log.mk
 
 # Set the number of parallel embedding jobs to run
 MAKE_PARALLEL_OPTION ?= --jobs 2
-  $(call log.info, MAKE_PARALLEL_OPTION)
+  $(call log.debug, MAKE_PARALLEL_OPTION)
 
 
 # SETTING DEFAULT VARIABLES FOR THE PROCESSING
@@ -38,7 +38,7 @@ MAKE_PARALLEL_OPTION ?= --jobs 2
 # The build directory where all local input and output files are stored
 # Can be removed anytime without issues regarding s3
 BUILD_DIR ?= build.d
-  $(call log.info, BUILD_DIR)
+  $(call log.debug, BUILD_DIR)
 
 # Specify the newspaper to process. Just a suffix appended to the s3 processing path
 # s3 is ok!  can also be actionfem/actionfem-1933
@@ -50,21 +50,21 @@ NEWSPAPER ?= actionfem
 # Feel free to handcraft another file with the newspapers you want to process
 # This file is automatically populated from the content of s3 rebuilt bucket
 NEWSPAPERS_TO_PROCESS_FILE ?= $(BUILD_DIR)/newspapers.txt
-  $(call log.info, NEWSPAPERS_TO_PROCESS_FILE)
+  $(call log.debug, NEWSPAPERS_TO_PROCESS_FILE)
 
 
 # HUGGINGFACE MODEL SETTINGS
 
 # set the model cache directory to a local project directory (default: ~/.cache/huggingface/transformers/)
 HF_HOME?=./hf.d
-  $(call log.info, HF_HOME)
+  $(call log.debug, HF_HOME)
 
 # Set the model name and version
 CREATOR_NAME ?= Alibaba-NLP
 HF_MODEL_NAME ?= gte-multilingual-base
 HF_MODEL_VERSION ?= f7d567e
 HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
-  $(call log.info, HF_FULL_MODEL_NAME)
+  $(call log.debug, HF_FULL_MODEL_NAME)
 
 
 # TEXT EMBEDDING SETTINGS
@@ -73,17 +73,17 @@ HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
 #EMBEDDING_INCLUDE_TEXT_OPTION ?= --include-text
 # To disable the inclusion of the text, comment the line above and uncomment the line below
 EMBEDDING_INCLUDE_TEXT_OPTION ?=
-  $(call log.info, EMBEDDING_INCLUDE_TEXT_OPTION)
+  $(call log.debug, EMBEDDING_INCLUDE_TEXT_OPTION)
 
 # Set the minimum character length for the text to be included for embedding.
 # Texts shorter than this length will not be embedded and will be skipped entirely (not showing up in the output at all).
 EMBEDDING_MIN_CHAR_LENGTH ?= 800
-  $(call log.info, EMBEDDING_MIN_CHAR_LENGTH)
+  $(call log.debug, EMBEDDING_MIN_CHAR_LENGTH)
 
 # Set the types of content items to embed. The default is to embed articles.
 # Possible types are: ar, page
 EMBEDDING_CONTENT_TYPE_OPTION?= --content-type ar
-  $(call log.info, EMBEDDING_CONTENT_TYPE_OPTION)
+  $(call log.debug, EMBEDDING_CONTENT_TYPE_OPTION)
 
 # S3 STORAGE UPDATE SETTINGS
 
@@ -91,7 +91,7 @@ EMBEDDING_CONTENT_TYPE_OPTION?= --content-type ar
 # EMBEDDING_S3_OUTPUT_DRY_RUN?= --s3-output-dry-run
 # To disable the dry-run mode, comment the line above and uncomment the line below
 EMBEDDING_S3_OUTPUT_DRY_RUN ?=
-  $(call log.info, EMBEDDING_S3_OUTPUT_DRY_RUN)
+  $(call log.debug, EMBEDDING_S3_OUTPUT_DRY_RUN)
 
 # Keep only the local timestam output files after uploading (only relevant when
 # uploading to s3)
@@ -99,7 +99,7 @@ EMBEDDING_S3_OUTPUT_DRY_RUN ?=
 EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION ?= --keep-timestamp-only
 # To disable the keep-timestamp-only mode, comment the line above and uncomment the line below
 #EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION ?= 
-  $(call log.info, EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION)
+  $(call log.debug, EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION)
 
 
 # Quit the processing if the output file already exists in s3
@@ -107,7 +107,7 @@ EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION ?= --keep-timestamp-only
 EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS ?= --quit-if-s3-output-exists
 # To disable the quit-if-s3-output-exists mode, comment the line above and uncomment the line below
 #EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS ?=
-  $(call log.info, EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS)
+  $(call log.debug, EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS)
 
 
 # When determining the order of years of a newspaper to process, order them by recency
@@ -115,7 +115,7 @@ EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS ?= --quit-if-s3-output-exists
 # avoiding waiting for the most recent years to be processed). By random order,
 # recomputations by different machines working on the dataset are less likely to happen.
 RANDOM_NEWSPAPER_YEAR_SORTING ?= |shuf
-  $(call log.info, RANDOM_NEWSPAPER_YEAR_SORTING)
+  $(call log.debug, RANDOM_NEWSPAPER_YEAR_SORTING)
 
 
 # DEFINING THE REQUIRED INPUT PATHS
@@ -126,11 +126,11 @@ IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
 
 # The input path
 IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
-  $(call log.info, IN_S3_PATH_REBUILT)
+  $(call log.debug, IN_S3_PATH_REBUILT)
 
 # The local path
 IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
-  $(call log.info, IN_LOCAL_PATH_REBUILT)
+  $(call log.debug, IN_LOCAL_PATH_REBUILT)
 
 
 # DEFINING THE GENERATED OUTPUT PATHS
@@ -142,11 +142,11 @@ OUT_S3_PROCESSED_VERSION ?= v1.0.0
 
 # The s3 output path
 OUT_S3_PATH_PROCESSED_DATA := s3://$(OUT_S3_BUCKET_PROCESSED_DATA)/$(OUT_S3_PROCESSED_INFIX)/$(OUT_S3_PROCESSED_VERSION)/$(NEWSPAPER)
-  $(call log.info, OUT_S3_PATH_PROCESSED_DATA)
+  $(call log.debug, OUT_S3_PATH_PROCESSED_DATA)
 
 # The local path in BUILD_DIR
 OUT_LOCAL_PATH_PROCESSED_DATA := $(BUILD_DIR)/$(OUT_S3_BUCKET_PROCESSED_DATA)/$(OUT_S3_PROCESSED_INFIX)/$(OUT_S3_PROCESSED_VERSION)/$(NEWSPAPER)
-  $(call log.info, OUT_LOCAL_PATH_PROCESSED_DATA)
+  $(call log.debug, OUT_LOCAL_PATH_PROCESSED_DATA)
 
 
 
@@ -159,7 +159,7 @@ help:
 	@echo "  resync    # Remove the local synchronization file stamp and redoes everything, ensuring a full sync with the remote server."
 	@echo "  newspaper # Process the text embeddings for a single newspaper specified by the NEWSPAPER variable"
 	@echo "  each      # Process the text embeddings for each newspaper found in the file $(NEWSPAPERS_TO_PROCESS_FILE)"
-	@echo "  help: Show this help message"
+	@echo "  help      # Show this help message"
 
 
 .PHONY: all  help
@@ -203,13 +203,13 @@ sync-input: sync-input-rebuilt
 
 # The local per-newspaper synchronization file stamp for the rebuilt input data: What is on S3 has been synced?
 IN_LOCAL_REBUILT_SYNC_STAMP_FILE := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER).last_synced
-  $(call log.info, IN_LOCAL_REBUILT_SYNC_STAMP_FILE)
+  $(call log.debug, IN_LOCAL_REBUILT_SYNC_STAMP_FILE)
 
 sync-input-rebuilt: $(IN_LOCAL_REBUILT_SYNC_STAMP_FILE)
 
 # The local per-newspaper synchronization file stamp for the output text embeddings: What is on S3 has been synced?
 OUT_LOCAL_PROCESSED_DATA_SYNC_STAMP_FILE := $(OUT_LOCAL_PATH_PROCESSED_DATA).last_synced
-  $(call log.info, OUT_LOCAL_PROCESSED_DATA_SYNC_STAMP_FILE)
+  $(call log.debug, OUT_LOCAL_PROCESSED_DATA_SYNC_STAMP_FILE)
 
 
 
@@ -241,6 +241,7 @@ $(BUILD_DIR)/newspapers.txt:
 	> $@
 
 $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER).last_synced:
+	mkdir -p $(@D) && \
 	python lib/s3_to_local_stamps.py \
 	   $(IN_S3_PATH_REBUILT) \
 	   --local-dir $(BUILD_DIR) \
@@ -249,6 +250,7 @@ $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER).last_synced:
 	touch $@
 
 $(OUT_LOCAL_PATH_PROCESSED_DATA).last_synced:
+	mkdir -p $(@D) && \
 	python lib/s3_to_local_stamps.py \
 	   $(OUT_S3_PATH_PROCESSED_DATA) \
 	   --local-dir $(BUILD_DIR) \
@@ -259,9 +261,9 @@ $(OUT_LOCAL_PATH_PROCESSED_DATA).last_synced:
 
 
 # variable for all locally available rebuilt stamp files. Needed for dependency tracking
-# of the build process
-local-rebuilt-stamp-files := $(shell ls -r $(IN_LOCAL_PATH_REBUILT)/*.jsonl.bz2.stamp $(RANDOM_NEWSPAPER_YEAR_SORTING))
-  $(call log.info, local-rebuilt-stamp-files)
+# of the build process. We discard errors as the path or file might not exist yet.
+local-rebuilt-stamp-files := $(shell ls -r $(IN_LOCAL_PATH_REBUILT)/*.jsonl.bz2.stamp 2> /dev/null $(RANDOM_NEWSPAPER_YEAR_SORTING))
+  $(call log.debug, local-rebuilt-stamp-files)
 
 define local_rebuilt_stamp_to_local_textembedding_file
 $(1:$(IN_LOCAL_PATH_REBUILT)/%.jsonl.bz2.stamp=$(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2)
@@ -271,7 +273,7 @@ endef
 local-textembedding-files := \
  $(call local_rebuilt_stamp_to_local_textembedding_file,$(local-rebuilt-stamp-files))
 
-  $(call log.info, local-textembedding-files)
+  $(call log.debug, local-textembedding-files)
 
 textembedding-target: $(local-textembedding-files)
 
@@ -292,7 +294,9 @@ $(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2: $(IN_LOCAL_PATH_REBUILT)/%.jsonl.b
 	  $(EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION) \
 	  2> >( tee $@.log >&2 )
 
-
+check-python-installation:
+	@python3 -c "import sentence_transformers as st; import smart_open;" || \
+	@echo "Double check whether the required python packages are installed! or you running in the correct python environment!"
 
 # function to turn a local file path into a s3 file path, optionall cutting off the
 # suffix given as argument
