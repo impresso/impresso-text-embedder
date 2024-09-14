@@ -17,6 +17,8 @@ export SHELLOPTS:=errexit:pipefail
 # Delete intermediate files if the target fails
 .DELETE_ON_ERROR:
 
+# suppress all default rules
+.SUFFIXES:
 
 ###
 # SETTINGS FOR THE BUILD PROCESS
@@ -201,7 +203,7 @@ setup:
 	mkdir -p $(OUT_LOCAL_PATH_PROCESSED_DATA)
 	$(MAKE) check-python-installation
 	$(MAKE) setup-hf-model
-	$(MAKE) newspapers-to-process-target
+	$(MAKE) newspaper-list-target
 
 setup-hf-model:
 	# 
@@ -254,7 +256,6 @@ OUT_LOCAL_PROCESSED_DATA_SYNC_STAMP_FILE := $(OUT_LOCAL_PATH_PROCESSED_DATA).las
 sync-output: sync-output-processed-data
 
 sync-output-processed-data: $(OUT_LOCAL_PROCESSED_DATA_SYNC_STAMP_FILE)
-
 
 
 # Remove the local synchronization file stamp and redoes everything, ensuring a full sync with the remote server.

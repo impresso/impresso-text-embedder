@@ -87,7 +87,7 @@ BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
    ```
 
 5. **Setup Directories and Model:**
-   Create necessary directories and download the Hugging Face model:
+   Create necessary directories, the list of newspapers to process and download the Hugging Face model:
    ```bash
    make setup
    ```
@@ -102,15 +102,14 @@ make help
 
 ### Running the Embedder
 
-1. **Process Newspapers:**
+1. **Process a single newspaper:**
    You can specify a list of newspapers to process using the `NEWSPAPER_LIST_FILE`. The default list is generated automatically from the S3 bucket:
 
    ```bash
-   make sync
    make newspaper
    ```
 
-2. **Parallel Processing:**
+2. **Parallel Processing of each newspaper:**
    To process newspapers in parallel, use:
 
    ```bash
