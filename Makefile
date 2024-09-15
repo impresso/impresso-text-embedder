@@ -229,8 +229,8 @@ newspaper:
 
 # Process the text embeddings for each newspaper found in the file $(NEWSPAPERS_TO_PROCESS_FILE)
 each:
-	for NEWSPAPER_FILTER in $(file < $(NEWSPAPERS_TO_PROCESS_FILE)) ; do \
-		$(MAKE) NEWSPAPER=$$NEWSPAPER_FILTER all  ; \
+	for np in $(file < $(NEWSPAPERS_TO_PROCESS_FILE)) ; do \
+		$(MAKE) NEWSPAPER="$$np" all  ; \
 	done
 
 
@@ -242,7 +242,7 @@ sync: sync-input sync-output
 sync-input: sync-input-rebuilt
 
 # The local per-newspaper synchronization file stamp for the rebuilt input data: What is on S3 has been synced?
-IN_LOCAL_REBUILT_SYNC_STAMP_FILE := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER).last_synced
+IN_LOCAL_REBUILT_SYNC_STAMP_FILE := $(IN_LOCAL_PATH_REBUILT).last_synced
   $(call log.debug, IN_LOCAL_REBUILT_SYNC_STAMP_FILE)
 
 sync-input-rebuilt: $(IN_LOCAL_REBUILT_SYNC_STAMP_FILE)
