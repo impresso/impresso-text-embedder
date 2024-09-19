@@ -83,6 +83,19 @@ $(NEWSPAPERS_TO_PROCESS_FILE):
     print(*l)" \
 	> $@
 
+###
+# HUGGINGFACE MODEL SETTINGS
+
+# set the model cache directory to a local project directory (default: ~/.cache/huggingface/transformers/)
+HF_HOME ?= ./hf.d
+  $(call log.debug, HF_HOME)
+
+# Set the model name and version
+CREATOR_NAME ?= Alibaba-NLP
+HF_MODEL_NAME ?= gte-multilingual-base
+HF_MODEL_VERSION ?= f7d567e
+HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
+  $(call log.debug, HF_FULL_MODEL_NAME)
 
 ###
 # DEFINING THE REQUIRED DATA INPUT PATHS
@@ -126,19 +139,6 @@ OUT_LOCAL_PATH_PROCESSED_DATA := $(BUILD_DIR)/$(OUT_S3_BUCKET_PROCESSED_DATA)/$(
   $(call log.debug, OUT_LOCAL_PATH_PROCESSED_DATA)
 
 
-###
-# HUGGINGFACE MODEL SETTINGS
-
-# set the model cache directory to a local project directory (default: ~/.cache/huggingface/transformers/)
-HF_HOME ?= ./hf.d
-  $(call log.debug, HF_HOME)
-
-# Set the model name and version
-CREATOR_NAME ?= Alibaba-NLP
-HF_MODEL_NAME ?= gte-multilingual-base
-HF_MODEL_VERSION ?= f7d567e
-HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
-  $(call log.debug, HF_FULL_MODEL_NAME)
 
 
 ###
@@ -295,7 +295,7 @@ local-rebuilt-stamp-files := \
   $(call log.debug, local-rebuilt-stamp-files)
 
 define local_rebuilt_stamp_to_local_textembedding_file
-$(1:$(IN_LOCAL_PATH_REBUILT)/%.jsonl.bz2.stamp=$(OUT_LOCAåL_PATH_PROCESSED_DATA)/%.jsonl.bz2)
+$(1:$(IN_LOCAL_PATH_REBUILT)/%.jsonl.bz2.stamp=$(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2)
 endef
 
 
