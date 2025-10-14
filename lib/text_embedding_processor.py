@@ -285,9 +285,8 @@ class TextEmbeddingProcessor:
 
             start_time = time.time()  # Start timing
 
-            max_tokens = (
-                self.model.tokenizer.model_max_length
-            )  # Retrieves the max token length
+            special_tokens = self.model.tokenizer.num_special_tokens_to_add(pair=False)
+            max_tokens = self.model.tokenizer.model_max_length - special_tokens  # Actual chunk content budget
             logging.info(
                 f"Max tokens: {max_tokens}, length of text (tokens): {len(text.split())}"
             )
