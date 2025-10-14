@@ -26,6 +26,7 @@ from sentence_transformers import SentenceTransformer
 import torch
 import boto3
 from dotenv import load_dotenv
+import numpy as np
 
 from transformers import AutoTokenizer
 
@@ -329,6 +330,11 @@ class TextEmbeddingProcessor:
 
             if self.args.include_text:
                 result["text"] = text
+
+            if len(all_embeddings) > 1:
+                embedding = np.mean(np.stack(all_embeddings), axis=0)
+            else:
+                embedding = all_embeddings[0]
 
             result["embedding"] = [round(n, 5) for n in embedding.tolist()]
 
