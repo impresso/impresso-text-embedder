@@ -270,6 +270,7 @@ class TextEmbeddingProcessor:
             self.model = self.load_model()
 
             self.model.to(self.map_location)
+            log.info(f"Model moved to device: {next(self.model.parameters()).device}")
 
         log.debug(f"Computing embedding for ID: {data.get('id')}")
         text = data.get("ft", "")
