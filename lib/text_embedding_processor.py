@@ -248,10 +248,10 @@ class TextEmbeddingProcessor:
 
     def chunk_text_exact(self, text: str, tokenizer: AutoTokenizer,
                          max_subtokens: int) -> Generator[str, None, None]:
-        subtokens = tokenizer.encode(text)
+        subtokens = tokenizer.encode(text, add_special_tokens=False)
         for i in range(0, len(subtokens), max_subtokens):
             chunk = subtokens[i: i + max_subtokens]
-            yield tokenizer.decode(chunk)
+            yield tokenizer.decode(chunk, skip_special_tokens=True, clean_up_tokenization_spaces=True)
 
     def compute_embeddings(self, data: JSONType) -> JSONType | None:
         """Computes embeddings for the text in the JSON data."""
