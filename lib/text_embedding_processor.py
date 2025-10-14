@@ -290,7 +290,7 @@ class TextEmbeddingProcessor:
             special_tokens = self.model.tokenizer.num_special_tokens_to_add(pair=False)
             max_tokens = self.model.tokenizer.model_max_length - special_tokens  # Actual chunk content budget
             logging.info(
-                f"Max tokens: {max_tokens}, length of text (tokens): {len(text.split())}"
+                f"Max tokens: {max_tokens}, length of text (tokens): {len(self.model.tokenizer.encode(text, add_special_tokens=False))}"
             )
             # Split text into chunks and process each chunk
             for chunk in self.chunk_text_exact(text, self.model.tokenizer, max_tokens):
