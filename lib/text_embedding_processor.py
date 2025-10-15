@@ -242,7 +242,7 @@ class TextEmbeddingProcessor:
             return None
 
         if self.model is None:
-            # some newspapers do not contain any valid text, therefore avoiding to load
+            # some newspapers do not contain any valid text, therefore avoiding loading
             # the model if not needed
             self.model = self.load_model()
         log.debug(f"Computing embedding for ID: {data.get('id')}")
@@ -264,7 +264,7 @@ class TextEmbeddingProcessor:
             )
             end_time = time.time()  # End timing
             self.stats["total_time"] += (
-                end_time - start_time
+                    end_time - start_time
             )  # Accumulate processing time
 
             self.last_timestamp = datetime.datetime.fromtimestamp(
@@ -489,7 +489,17 @@ if __name__ == "__main__":
             " %(default)s"
         ),
     )
-
+    parser.add_argument(
+        "--embedding-level",
+        choices=["text", "sentence", "chunk"],
+        default="text",
+        help=(
+            "Specify the embedding level: "
+            "'text' (default, one embedding per document), "
+            "'sentence' (one embedding per sentence), or "
+            "'chunk' (chunk text using chonkie)."
+        ),
+    )
     parser.add_argument(
         "--level",
         default="INFO",
@@ -523,16 +533,16 @@ if __name__ == "__main__":
             " option --s3-output-path set. Option --keep-timestamp-only is ignored."
         )
     if (
-        arguments.quit_if_s3_output_exists and not arguments.s3_output_path
+            arguments.quit_if_s3_output_exists and not arguments.s3_output_path
     ):  # pragma: no cover
         log.warning(
             "Option --quit-if-s3-output-exists is ignored without S3 output path"
             " option --s3-output-path set."
         )
     if (
-        arguments.output_path
-        and arguments.no_overwrite
-        and os.path.exists(arguments.output_path)
+            arguments.output_path
+            and arguments.no_overwrite
+            and os.path.exists(arguments.output_path)
     ):
         log.warning(
             f"Output path {arguments.output_path} exists and --no-overwrite is set."

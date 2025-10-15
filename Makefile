@@ -170,7 +170,7 @@ EMBEDDING_CONTENT_TYPE_OPTION ?= --content-type ar
 EMBEDDING_S3_OUTPUT_DRY_RUN ?=
   $(call log.debug, EMBEDDING_S3_OUTPUT_DRY_RUN)
 
-# Keep only the local timestam output files after uploading (only relevant when
+# Keep only the local timestamp output files after uploading (only relevant when
 # uploading to s3)
 #
 EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION ?= --keep-timestamp-only
@@ -236,7 +236,7 @@ each:
 
 # SYNCING THE INPUT AND OUTPUT DATA FROM S3 TO LOCAL DIRECTORY
 
-# Sync  the data from the S3 bucket to the local directory for input of textembeddings and output of textembeddings
+# Sync the data from the S3 bucket to the local directory for input of textembeddings and output of textembeddings
 sync: sync-input sync-output
 
 sync-input: sync-input-rebuilt
