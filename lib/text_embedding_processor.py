@@ -23,9 +23,10 @@ import time
 from smart_open import open
 from typing import Any, Dict, Iterator, Tuple, Generator, List
 from sentence_transformers import SentenceTransformer
-
+import torch
 import boto3
 from dotenv import load_dotenv
+import numpy as np
 
 random.seed(42)
 
@@ -169,6 +170,7 @@ class TextEmbeddingProcessor:
         self.model = None
         self.stats = Counter(valid_texts=0, short_texts=0, total_time=0)
         self.last_timestamp = None  # UTC timestamp of the last processed document
+        self.map_location = "cuda" if torch.cuda.is_available() else "cpu"
 
     def run(self) -> None:
         """Orchestrates the file processing based on S3 objects or local files."""
@@ -205,12 +207,19 @@ class TextEmbeddingProcessor:
             self.args.model_name,
             self.args.model_revision,
         )
-        m = SentenceTransformer(
-            self.args.model_name,
-            trust_remote_code=True,
-            revision=self.args.model_revision,
-        )
+        m = SentenceTransformer(model_name_or_path=self.args.model_name,
+                                trust_remote_code=True,
+                                revision=self.args.model_revision,
+                                )
+
         log.info("Model loaded.")
+        # Check the device of the model's parameters
+        if next(m.parameters()).is_cuda:  # Check if the model is on a CUDA device
+            current_device = next(m.parameters()).device
+            device_name = torch.cuda.get_device_name(current_device)
+            log.info(f"Model loaded on GPU: {current_device} ({device_name})")
+        else:
+            log.info("Model loaded on CPU.")
         return m
 
     def read_lines(self, input_path: str) -> Generator[str, None, None] | List[str]:
@@ -231,6 +240,13 @@ class TextEmbeddingProcessor:
             with open(input_path, "rt") as infile:
                 return (line for line in infile)
 
+    def chunk_text_exact(self, text: str, tokenizer: AutoTokenizer,
+                         max_subtokens: int) -> Generator[str, None, None]:
+        subtokens = tokenizer.encode(text, add_special_tokens=False)
+        for i in range(0, len(subtokens), max_subtokens):
+            chunk = subtokens[i: i + max_subtokens]
+            yield tokenizer.decode(chunk, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+
     def compute_embeddings(self, data: JSONType) -> JSONType | None:
         """Computes embeddings for the text in the JSON data."""
 
@@ -245,6 +261,10 @@ class TextEmbeddingProcessor:
             # some newspapers do not contain any valid text, therefore avoiding to load
             # the model if not needed
             self.model = self.load_model()
+
+            self.model.to(self.map_location)
+            log.info(f"Model moved to device: {next(self.model.parameters()).device}")
+
         log.debug(f"Computing embedding for ID: {data.get('id')}")
         text = data.get("ft", "")
         textlen = len(text)
@@ -254,17 +274,35 @@ class TextEmbeddingProcessor:
 
             self.stats["valid_texts"] += 1
             self.stats[f"valid_texts_lg:{data.get('lang')}"] += 1
+
+            # Initialize a list to hold embeddings from all chunks
+            all_embeddings = []
+
             start_time = time.time()  # Start timing
-            embedding = self.model.encode(
-                text,
-                batch_size=1,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-                normalize_embeddings=self.args.normalize_embeddings,
+
+            special_tokens = self.model.tokenizer.num_special_tokens_to_add(pair=False)
+            max_tokens = self.model.tokenizer.model_max_length - special_tokens  # Actual chunk content budget
+            logging.info(
+                f"Max tokens: {max_tokens}, length of text (tokens): {len(self.model.tokenizer.encode(text, add_special_tokens=False))}"
             )
+            # Split text into chunks and process each chunk
+            for chunk in self.chunk_text_exact(text, self.model.tokenizer, max_tokens):
+                embedding = self.model.encode(
+                    chunk,
+                    batch_size=1,
+                    show_progress_bar=False,
+                    convert_to_numpy=True,
+                    normalize_embeddings=self.args.normalize_embeddings,
+                )
+                all_embeddings.append([round(n, 5) for n in embedding.tolist()])
+            logging.info(f"Number of chunks: {len(all_embeddings)}")
+
+            self.stats.setdefault("chunk_length", []).append(max_tokens)
+            self.stats.setdefault("chunks", []).append(len(all_embeddings))
+
             end_time = time.time()  # End timing
             self.stats["total_time"] += (
-                end_time - start_time
+                    end_time - start_time
             )  # Accumulate processing time
 
             self.last_timestamp = datetime.datetime.fromtimestamp(
@@ -279,10 +317,18 @@ class TextEmbeddingProcessor:
                 "ts": self.last_timestamp.isoformat() + "Z",
                 "embedder": embedder,
                 "len": textlen,
+                "chunks": len(all_embeddings),
+                "chunk_length": max_tokens,
+                "embedding_type": "page",
             }
 
             if self.args.include_text:
                 result["text"] = text
+
+            if len(all_embeddings) > 1:
+                embedding = np.mean(np.stack(all_embeddings), axis=0)
+            else:
+                embedding = all_embeddings[0]
 
             result["embedding"] = [round(n, 5) for n in embedding.tolist()]
 
@@ -523,16 +569,16 @@ if __name__ == "__main__":
             " option --s3-output-path set. Option --keep-timestamp-only is ignored."
         )
     if (
-        arguments.quit_if_s3_output_exists and not arguments.s3_output_path
+            arguments.quit_if_s3_output_exists and not arguments.s3_output_path
     ):  # pragma: no cover
         log.warning(
             "Option --quit-if-s3-output-exists is ignored without S3 output path"
             " option --s3-output-path set."
         )
     if (
-        arguments.output_path
-        and arguments.no_overwrite
-        and os.path.exists(arguments.output_path)
+            arguments.output_path
+            and arguments.no_overwrite
+            and os.path.exists(arguments.output_path)
     ):
         log.warning(
             f"Output path {arguments.output_path} exists and --no-overwrite is set."
