@@ -299,8 +299,8 @@ class TextEmbeddingProcessor:
                 all_embeddings.append([round(n, 5) for n in embedding.tolist()])
             logging.info(f"Number of chunks: {len(all_embeddings)}")
 
-            self.stats["chunk_length"] = max_tokens
-            self.stats["chunks"] = len(all_embeddings)
+            self.stats.setdefault("chunk_length", []).append(max_tokens)
+            self.stats.setdefault("chunks", []).append(len(all_embeddings))
 
             end_time = time.time()  # End timing
             self.stats["total_time"] += (
