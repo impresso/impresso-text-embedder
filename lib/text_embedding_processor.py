@@ -242,11 +242,6 @@ class TextEmbeddingProcessor:
             with open(input_path, "rt") as infile:
                 return (line for line in infile)
 
-    def chunk_text(self, text: str, max_tokens: int) -> Generator[str, None, None]:
-        words = text.split()
-        for i in range(0, len(words), max_tokens):
-            yield " ".join(words[i: i + max_tokens])
-
     def chunk_text_exact(self, text: str, tokenizer: AutoTokenizer,
                          max_subtokens: int) -> Generator[str, None, None]:
         subtokens = tokenizer.encode(text, add_special_tokens=False)
