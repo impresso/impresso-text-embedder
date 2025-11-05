@@ -28,8 +28,6 @@ import boto3
 from dotenv import load_dotenv
 import numpy as np
 
-from transformers import AutoTokenizer
-
 random.seed(42)
 
 log = logging.getLogger(__name__)
