@@ -25,29 +25,40 @@ $(info Make: Including config.local.mk: $(shell readlink -f config.local.mk))
 # User-specific settings start here
 # ----------------------------------------------------------------
 
+# Were to write the local files
+BUILD_DIR := build.d
+
+# Set the model name and version
+CREATOR_NAME := Alibaba-NLP
+HF_MODEL_NAME := gte-multilingual-base
+HF_MODEL_VERSION := f7d567e
+HF_FULL_MODEL_NAME := $(CREATOR_NAME)/$(HF_MODEL_NAME)
+  $(call log.debug, HF_FULL_MODEL_NAME)
+
 # The input bucket
-IN_S3_BUCKET_REBUILT := 22-rebuilt-final
-OUT_S3_BUCKET_PROCESSED_DATA := 40-processed-data-sandbox
+IN_S3_PREFIXES := lingproc/lingproc-test-v1.0.0
+IN_S3_BUCKET_REBUILT := 000-processing-test-samples
+
+OUT_S3_BUCKET_PROCESSED_DATA := 140-processed-data-sandbox
 
 # The output infix and version see internal documentation for more file structure information
 OUT_S3_PROCESSED_INFIX := textembeddings-$(HF_MODEL_NAME)
 OUT_S3_PROCESSED_VERSION := v1.0.1
 
-# Were to write the local files
-BUILD_DIR ?= build.d
-
 # HUGGINGFACE MODEL SETTINGS
 # set the model cache directory to a local project directory (default:
 # ~/.cache/huggingface/transformers/)
 # should be a fast local disk
-HF_HOME ?= ./hf.d
+HF_HOME := ./hf.d
 
 # set the number of parallel jobs when processing every newspaper (each newspaper-year
 # is on job; the default is 2)
-MAKE_PARALLEL_OPTION ?= --jobs 2
+MAKE_PARALLEL_OPTION := --jobs 2
 
 # If you want to restrict the newspaper to work on
-NEWSPAPER ?= actionfem
+# Provider + Newspaper (pair)
+PROVIDER  := SNL
+NEWSPAPER := EXP
 
 # suppress the logging output of make itself
 LOGGING_LEVEL := WARNING
