@@ -209,7 +209,6 @@ EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS ?= --quit-if-s3-output-exists
 # TARGETS FOR THE BUILD PROCESS
 
 # Prepare the local directories and store the HF model locally
-setup:
 	#
 	# NOTE: you need to INSTALL the dependencies manually BEFORE running
 	# the make target `setup`. See the README.md for more installation information.
@@ -217,26 +216,34 @@ setup:
 	# SEE: https://pytorch.org/get-started/locally/
 	#
 	# Create the local directory
-	mkdir -p $(IN_LOCAL_PATH_REBUILT)
-	mkdir -p $(OUT_LOCAL_PATH_PROCESSED_DATA)
+setup:
+	@echo "Running setup..."
+	@mkdir -p $(IN_LOCAL_PATH_REBUILT)
+	@mkdir -p $(OUT_LOCAL_PATH_PROCESSED_DATA)
 	$(MAKE) check-python-installation
 	$(MAKE) setup-hf-model
-	$(MAKE) newspaper-list-target
+	$(MAKE) newspaper-list-target \
+		&& echo "$(OK) Newspaper list created" \
+		|| echo "$(FAIL) Newspaper list failed"
+	@echo "$(OK) Setup complete"
 
 setup-hf-model:
-	# 
 	# DOWNLOADING THE HUGGINGFACE MODEL
-	python -c "from sentence_transformers import SentenceTransformer as st; \
-	m = st('$(HF_FULL_MODEL_NAME)', revision='$(HF_MODEL_VERSION)',trust_remote_code=True); \
-	len(m.encode('This is a test!')) or exit(1)"
+	@echo "Downloading HuggingFace model $(HF_FULL_MODEL_NAME) ..."
+	@python -c "from sentence_transformers import SentenceTransformer as st; \
+m = st('$(HF_FULL_MODEL_NAME)', revision='$(HF_MODEL_VERSION)', trust_remote_code=True); \
+len(m.encode('This is a test!')) or exit(1)" \
+		&& echo "$(OK) Model downloaded successfully" \
+		|| (echo "$(FAIL) Failed to download HuggingFace model"; exit 1)
 	# OK: DOWNLOADING THE HUGGINGFACE MODEL DONE
 
 
 check-python-installation:
-	#
 	# TEST YOUR PYTHON ENVIRONMENT...
-	python -c "import sentence_transformers as st; import smart_open;" || \
-	{ echo "Double check whether the required python packages are installed! or you running in the correct python environment!" ; exit 1; }
+	@echo "Checking Python environment..."
+	@python -c "import sentence_transformers as st; import smart_open;" \
+		&& echo "$(OK) Python environment OK" \
+		|| (echo "$(FAIL) Python environment BROKEN — missing packages"; exit 1)
 	# OK: YOUR PYTHON ENVIRONMENT IS FINE!
 
 
@@ -255,7 +262,14 @@ each:
 # SYNCING THE INPUT AND OUTPUT DATA FROM S3 TO LOCAL DIRECTORY
 
 # Sync the data from the S3 bucket to the local directory for input of textembeddings and output of textembeddings
-sync: sync-input sync-output
+sync:
+	@echo "Syncing input and output folders..."
+	$(MAKE) sync-input \
+		&& echo "$(OK) Input sync complete" \
+		|| echo "$(FAIL) Input sync failed"
+	$(MAKE) sync-output \
+		&& echo "$(OK) Output sync complete" \
+		|| echo "$(FAIL) Output sync failed"
 
 sync-input: sync-input-rebuilt
 
@@ -328,7 +342,14 @@ local-textembedding-files := \
 
   $(call log.debug, local-textembedding-files)
 
-textembedding-target: sync $(local-textembedding-files)
+textembedding-target:
+	@echo "Processing text embeddings for $(NEWSPAPER)..."
+	$(MAKE) sync \
+		&& echo "$(OK) Sync OK" \
+		|| (echo "$(FAIL) Sync FAILED"; exit 1)
+	$(MAKE) $(local-textembedding-files) \
+		&& echo "$(OK) Text embeddings generated" \
+		|| (echo "$(FAIL) Text embedding failed"; exit 1)
 
 # Rule to process the text embeddings for a single newspaper
 $(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2: $(IN_LOCAL_PATH_REBUILT)/%.jsonl.bz2.stamp
