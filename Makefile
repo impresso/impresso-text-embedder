@@ -128,8 +128,8 @@ HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
 #IN_S3_PREFIX_REBUILT ?=
 
 # If using test data, override in config.local.mk:
-IN_S3_BUCKET_REBUILT := 000-processing-test-samples
-IN_S3_PREFIX_REBUILT := lingproc/lingproc-test-v1.0.0
+#IN_S3_BUCKET_REBUILT := 000-processing-test-samples
+#IN_S3_PREFIX_REBUILT := lingproc/lingproc-test-v1.0.0
 
 #IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(IN_S3_PREFIX_REBUILT)/$(NEWSPAPER)
 # The input path
