@@ -2,3 +2,5 @@
 .env
 .idea
 config.local.mk
+lib/__pycache__/
+
