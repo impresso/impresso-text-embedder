@@ -71,31 +71,17 @@ NEWSPAPER_YEAR_SORTING ?= shuf
 newspaper-list-target: $(NEWSPAPERS_TO_PROCESS_FILE)
 
 # Rule to generate the file containing the newspapers to process
-# we shuffle the newspapers to avoid re-computations by different machines working on the dataset
-#$(NEWSPAPERS_TO_PROCESS_FILE):
-	#python -c \
-#	"import lib.s3_to_local_stamps as m; import random; \
-#	s3 = m.get_s3_resource(); \
-#	bucket = s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
-#    result = bucket.meta.client.list_objects_v2(Bucket=bucket.name, Delimiter='/'); \
-#	l = [prefix['Prefix'][:-1] for prefix in result.get('CommonPrefixes', [])]; \
-#	random.shuffle(l); \
-#    print(*l)" \
-#	> $@
-
-# List provider/newspaper pairs
+# we shuffle the newspapers to avoid recomputations by different machines working on the dataset
 $(NEWSPAPERS_TO_PROCESS_FILE):
-	python -c "import lib.s3_to_local_stamps as m; \
-s3=m.get_s3_resource(); \
-bucket=s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
-top='$(IN_S3_PREFIX_REBUILT)/'; \
-providers=bucket.meta.client.list_objects_v2(Bucket=bucket.name,Prefix=top,Delimiter='/').get('CommonPrefixes',[]); \
-pairs=[]; \
-[pairs.append(p['Prefix'].split('/')[-2] + '/' + sp['Prefix'].split('/')[-2]) \
- for p in providers \
- for sp in bucket.meta.client.list_objects_v2(Bucket=bucket.name,Prefix=p['Prefix'],Delimiter='/').get('CommonPrefixes',[])]; \
-print(*pairs)" \
-> $(NEWSPAPERS_TO_PROCESS_FILE)
+	python -c \
+	"import lib.s3_to_local_stamps as m; import random; \
+	s3 = m.get_s3_resource(); \
+	bucket = s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
+    result = bucket.meta.client.list_objects_v2(Bucket=bucket.name, Delimiter='/'); \
+	l = [prefix['Prefix'][:-1] for prefix in result.get('CommonPrefixes', [])]; \
+	random.shuffle(l); \
+    print(*l)" \
+	> $@
 
 ###
 # HUGGINGFACE MODEL SETTINGS
@@ -104,13 +90,12 @@ print(*pairs)" \
 HF_HOME ?= ./hf.d
   $(call log.debug, HF_HOME)
 
-# MOVED TO CONFIG.LOCAL.MK
-## Set the model name and version
-#CREATOR_NAME ?= Alibaba-NLP
-#HF_MODEL_NAME ?= gte-multilingual-base
-#HF_MODEL_VERSION ?= f7d567e
-#HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
-#  $(call log.debug, HF_FULL_MODEL_NAME)
+# Set the model name and version
+CREATOR_NAME ?= Alibaba-NLP
+HF_MODEL_NAME ?= gte-multilingual-base
+HF_MODEL_VERSION ?= f7d567e
+HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
+  $(call log.debug, HF_FULL_MODEL_NAME)
 
 ###
 # DEFINING THE REQUIRED DATA INPUT PATHS
@@ -124,38 +109,26 @@ HF_HOME ?= ./hf.d
 # Make variables for local paths are defined as OUT_LOCAL_ or IN_LOCAL_
 
 # The input bucket
-# Split bucket from prefix
-#IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
-#IN_S3_PREFIX_REBUILT ?=
+IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
 
-# If using test data, override in config.local.mk:
-#IN_S3_BUCKET_REBUILT := 000-processing-test-samples
-#IN_S3_PREFIX_REBUILT := lingproc/lingproc-test-v1.0.0
-
-#IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(IN_S3_PREFIX_REBUILT)/$(NEWSPAPER)
 # The input path
-
-IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(IN_S3_PREFIX_REBUILT)/$(PROVIDER)/$(NEWSPAPER)
+IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
   $(call log.debug, IN_S3_PATH_REBUILT)
 
-
 # The local path
-#IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
-#  $(call log.debug, IN_LOCAL_PATH_REBUILT)
-IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(PROVIDER)/$(NEWSPAPER)
-# where NEWSPAPER = PROVIDER/NEWSPAPER
+IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
+  $(call log.debug, IN_LOCAL_PATH_REBUILT)
 
 
 ###
 # DEFINING THE OUTPUT PATHS
 
 # The output bucket
-# MOVED TO CONFIG.LOCAL.MK
-#OUT_S3_BUCKET_PROCESSED_DATA ?= 42-processed-data-final
+OUT_S3_BUCKET_PROCESSED_DATA ?= 42-processed-data-final
 
-## The output infix and version see internal documentation for more file structure information
-#OUT_S3_PROCESSED_INFIX ?= textembeddings-$(HF_MODEL_NAME)
-#OUT_S3_PROCESSED_VERSION ?= v1.0.0
+# The output infix and version see internal documentation for more file structure information
+OUT_S3_PROCESSED_INFIX ?= textembeddings-$(HF_MODEL_NAME)
+OUT_S3_PROCESSED_VERSION ?= v1.0.0
 
 # The s3 output path
 OUT_S3_PATH_PROCESSED_DATA := s3://$(OUT_S3_BUCKET_PROCESSED_DATA)/$(OUT_S3_PROCESSED_INFIX)/$(OUT_S3_PROCESSED_VERSION)/$(NEWSPAPER)
@@ -197,7 +170,7 @@ EMBEDDING_CONTENT_TYPE_OPTION ?= --content-type ar
 EMBEDDING_S3_OUTPUT_DRY_RUN ?=
   $(call log.debug, EMBEDDING_S3_OUTPUT_DRY_RUN)
 
-# Keep only the local timestamp output files after uploading (only relevant when
+# Keep only the local timestam output files after uploading (only relevant when
 # uploading to s3)
 #
 EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION ?= --keep-timestamp-only
@@ -218,6 +191,7 @@ EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS ?= --quit-if-s3-output-exists
 # TARGETS FOR THE BUILD PROCESS
 
 # Prepare the local directories and store the HF model locally
+setup:
 	#
 	# NOTE: you need to INSTALL the dependencies manually BEFORE running
 	# the make target `setup`. See the README.md for more installation information.
@@ -225,34 +199,26 @@ EMBEDDING_QUIT_IF_S3_OUTPUT_EXISTS ?= --quit-if-s3-output-exists
 	# SEE: https://pytorch.org/get-started/locally/
 	#
 	# Create the local directory
-setup:
-	@echo "Running setup..."
-	@mkdir -p $(IN_LOCAL_PATH_REBUILT)
-	@mkdir -p $(OUT_LOCAL_PATH_PROCESSED_DATA)
+	mkdir -p $(IN_LOCAL_PATH_REBUILT)
+	mkdir -p $(OUT_LOCAL_PATH_PROCESSED_DATA)
 	$(MAKE) check-python-installation
 	$(MAKE) setup-hf-model
-	$(MAKE) newspaper-list-target \
-		&& echo "$(OK) Newspaper list created" \
-		|| echo "$(FAIL) Newspaper list failed"
-	@echo "$(OK) Setup complete"
+	$(MAKE) newspaper-list-target
 
 setup-hf-model:
+	# 
 	# DOWNLOADING THE HUGGINGFACE MODEL
-	@echo "Downloading HuggingFace model $(HF_FULL_MODEL_NAME) ..."
-	@python -c "from sentence_transformers import SentenceTransformer as st; \
-m = st('$(HF_FULL_MODEL_NAME)', revision='$(HF_MODEL_VERSION)', trust_remote_code=True); \
-len(m.encode('This is a test!')) or exit(1)" \
-		&& echo "$(OK) Model downloaded successfully" \
-		|| (echo "$(FAIL) Failed to download HuggingFace model"; exit 1)
+	python3 -c "from sentence_transformers import SentenceTransformer as st; \
+	m = st('$(HF_FULL_MODEL_NAME)', revision='$(HF_MODEL_VERSION)',trust_remote_code=True); \
+	len(m.encode('This is a test!')) or exit(1)"
 	# OK: DOWNLOADING THE HUGGINGFACE MODEL DONE
 
 
 check-python-installation:
+	#
 	# TEST YOUR PYTHON ENVIRONMENT...
-	@echo "Checking Python environment..."
-	@python -c "import sentence_transformers as st; import smart_open;" \
-		&& echo "$(OK) Python environment OK" \
-		|| (echo "$(FAIL) Python environment BROKEN — missing packages"; exit 1)
+	python3 -c "import sentence_transformers as st; import smart_open;" || \
+	{ echo "Double check whether the required python packages are installed! or you running in the correct python environment!" ; exit 1; }
 	# OK: YOUR PYTHON ENVIRONMENT IS FINE!
 
 
@@ -270,15 +236,8 @@ each:
 
 # SYNCING THE INPUT AND OUTPUT DATA FROM S3 TO LOCAL DIRECTORY
 
-# Sync the data from the S3 bucket to the local directory for input of textembeddings and output of textembeddings
-sync:
-	@echo "Syncing input and output folders..."
-	$(MAKE) sync-input \
-		&& echo "$(OK) Input sync complete" \
-		|| echo "$(FAIL) Input sync failed"
-	$(MAKE) sync-output \
-		&& echo "$(OK) Output sync complete" \
-		|| echo "$(FAIL) Output sync failed"
+# Sync  the data from the S3 bucket to the local directory for input of textembeddings and output of textembeddings
+sync: sync-input sync-output
 
 sync-input: sync-input-rebuilt
 
@@ -327,19 +286,13 @@ $(OUT_LOCAL_PATH_PROCESSED_DATA).last_synced:
 	touch $@
 
 
-# PROCESSING THE TEXT EMBEDDINGS
+
 # variable for all locally available rebuilt stamp files. Needed for dependency tracking
 # of the build process. We discard errors as the path or file might not exist yet.
-#local-rebuilt-stamp-files := \
-#    $(shell ls -r $(IN_LOCAL_PATH_REBUILT)/*.jsonl.bz2.stamp 2> /dev/null \
-#      |$(if $(NEWSPAPER_YEAR_SORTING),$(NEWSPAPER_YEAR_SORTING),cat))
-#  $(call log.debug, local-rebuilt-stamp-files)
-
-# Collect all local stamp files inside the provider/newspaper folder
 local-rebuilt-stamp-files := \
-    $(shell find $(IN_LOCAL_PATH_REBUILT) -maxdepth 1 -name '*.jsonl.bz2.stamp' 2>/dev/null \
-        | $(if $(NEWSPAPER_YEAR_SORTING),$(NEWSPAPER_YEAR_SORTING),cat))
-$(call log.debug, local-rebuilt-stamp-files)
+    $(shell ls -r $(IN_LOCAL_PATH_REBUILT)/*.jsonl.bz2.stamp 2> /dev/null \
+      |$(if $(NEWSPAPER_YEAR_SORTING),$(NEWSPAPER_YEAR_SORTING),cat))
+  $(call log.debug, local-rebuilt-stamp-files)
 
 define local_rebuilt_stamp_to_local_textembedding_file
 $(1:$(IN_LOCAL_PATH_REBUILT)/%.jsonl.bz2.stamp=$(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2)
@@ -351,14 +304,7 @@ local-textembedding-files := \
 
   $(call log.debug, local-textembedding-files)
 
-textembedding-target:
-	@echo "Processing text embeddings for $(NEWSPAPER)..."
-	$(MAKE) sync \
-		&& echo "$(OK) Sync OK" \
-		|| (echo "$(FAIL) Sync FAILED"; exit 1)
-	$(MAKE) $(local-textembedding-files) \
-		&& echo "$(OK) Text embeddings generated" \
-		|| (echo "$(FAIL) Text embedding failed"; exit 1)
+textembedding-target: sync $(local-textembedding-files)
 
 # Rule to process the text embeddings for a single newspaper
 $(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2: $(IN_LOCAL_PATH_REBUILT)/%.jsonl.bz2.stamp
@@ -410,13 +356,9 @@ help:
 
 # function to turn a local file path into a s3 file path, optionall cutting off the
 # suffix given as argument
-#define local_to_s3
-#$(subst $(2),,$(subst $(BUILD_DIR),s3:/,$(1)))
-#endef
 define local_to_s3
-$(subst $(2),,$(subst $(BUILD_DIR),s3://,$(1)))
+$(subst $(2),,$(subst $(BUILD_DIR),s3:/,$(1)))
 endef
-
 # Doctests for local_to_s3 function
 
 # Example 1: Convert local path to S3 path without stripping any suffix
