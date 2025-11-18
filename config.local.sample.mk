@@ -25,7 +25,12 @@ $(info Make: Including config.local.mk: $(shell readlink -f config.local.mk))
 # User-specific settings start here
 # ----------------------------------------------------------------
 
+# The input bucket
+IN_S3_BUCKET_REBUILT := 22-rebuilt-final
 OUT_S3_BUCKET_PROCESSED_DATA := 40-processed-data-sandbox
+
+# The output infix and version see internal documentation for more file structure information
+OUT_S3_PROCESSED_INFIX := textembeddings-$(HF_MODEL_NAME)
 OUT_S3_PROCESSED_VERSION := v1.0.1
 
 # Were to write the local files
