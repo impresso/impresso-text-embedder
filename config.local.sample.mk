@@ -52,6 +52,13 @@ $(info Make: Including config.local.mk: $(shell readlink -f config.local.mk))
 PROVIDER  ?= SNL
 NEWSPAPER ?= EXP
 
+# Set the model name and version
+CREATOR_NAME ?= Alibaba-NLP
+HF_MODEL_NAME ?= gte-multilingual-base
+HF_MODEL_VERSION ?= f7d567e
+HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
+  $(call log.debug, HF_FULL_MODEL_NAME)
+
 # S3 rebuilt input bucket (MUST NOT contain '/' !!!)
 IN_S3_BUCKET_REBUILT := 000-processing-test-samples
 
@@ -59,7 +66,8 @@ IN_S3_BUCKET_REBUILT := 000-processing-test-samples
 IN_S3_PREFIX_REBUILT := lingproc/lingproc-test-v1.0.0
 
 # HF etc.
-OUT_S3_BUCKET_PROCESSED_DATA := 000-processing-test-example
+OUT_S3_BUCKET_PROCESSED_DATA := 000-processing-test-samples
+OUT_S3_PROCESSED_INFIX := textembeddings-$(HF_MODEL_NAME)
 OUT_S3_PROCESSED_VERSION := v0.0.1
 
 BUILD_DIR ?= build.d

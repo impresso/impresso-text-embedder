@@ -45,9 +45,18 @@ The processing follows a structured organization:
 - **Build Directory:** A local mirror of the S3 storage, structured similarly for consistency.
 
 ```plaintext
+PREVIOUS STRUCTURE:
 # Example directory structure
 BUILD_DIR/BUCKET/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
 BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
+```
+
+
+```plaintext
+NEW STRUCTURE:
+# Example directory structure
+BUILD_DIR/BUCKET/PREFIX/PROVIDER/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
+BUILD_DIR/BUCKET/PROCESSING_TYPE_VERSION/PROVIDER/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
 ```
 
 ## Setup

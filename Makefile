@@ -104,12 +104,13 @@ print(*pairs)" \
 HF_HOME ?= ./hf.d
   $(call log.debug, HF_HOME)
 
-# Set the model name and version
-CREATOR_NAME ?= Alibaba-NLP
-HF_MODEL_NAME ?= gte-multilingual-base
-HF_MODEL_VERSION ?= f7d567e
-HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
-  $(call log.debug, HF_FULL_MODEL_NAME)
+# MOVED TO CONFIG.LOCAL.MK
+## Set the model name and version
+#CREATOR_NAME ?= Alibaba-NLP
+#HF_MODEL_NAME ?= gte-multilingual-base
+#HF_MODEL_VERSION ?= f7d567e
+#HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
+#  $(call log.debug, HF_FULL_MODEL_NAME)
 
 ###
 # DEFINING THE REQUIRED DATA INPUT PATHS
@@ -141,7 +142,7 @@ IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(IN_S3_PREFIX_REBUILT)/$(PRO
 # The local path
 #IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
 #  $(call log.debug, IN_LOCAL_PATH_REBUILT)
-IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
+IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(PROVIDER)/$(NEWSPAPER)
 # where NEWSPAPER = PROVIDER/NEWSPAPER
 
 
@@ -149,11 +150,12 @@ IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
 # DEFINING THE OUTPUT PATHS
 
 # The output bucket
-OUT_S3_BUCKET_PROCESSED_DATA ?= 42-processed-data-final
+# MOVED TO CONFIG.LOCAL.MK
+#OUT_S3_BUCKET_PROCESSED_DATA ?= 42-processed-data-final
 
-# The output infix and version see internal documentation for more file structure information
-OUT_S3_PROCESSED_INFIX ?= textembeddings-$(HF_MODEL_NAME)
-OUT_S3_PROCESSED_VERSION ?= v1.0.0
+## The output infix and version see internal documentation for more file structure information
+#OUT_S3_PROCESSED_INFIX ?= textembeddings-$(HF_MODEL_NAME)
+#OUT_S3_PROCESSED_VERSION ?= v1.0.0
 
 # The s3 output path
 OUT_S3_PATH_PROCESSED_DATA := s3://$(OUT_S3_BUCKET_PROCESSED_DATA)/$(OUT_S3_PROCESSED_INFIX)/$(OUT_S3_PROCESSED_VERSION)/$(NEWSPAPER)
