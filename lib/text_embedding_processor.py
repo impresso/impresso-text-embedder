@@ -146,6 +146,38 @@ def print_log_message_summary(highest_level: str):
     log.info("End of Statistics HELP.")
 
 
+def rebuild_ft_from_offsets(sents):
+    # Flatten all tokens across sentences
+    toks = []
+    for sent in sents:
+        toks.extend(sent.get("tok", []))
+
+    if not toks:
+        return ""
+
+    # Sort tokens by offset
+    toks = sorted(toks, key=lambda x: x["o"])
+
+    text = []
+    current_pos = 0
+
+    for tok in toks:
+        token_text = tok["t"]
+        offset = tok["o"]
+
+        # Add missing spaces or characters between tokens
+        if offset > current_pos:
+            text.append(" " * (offset - current_pos))
+
+        # Insert the token
+        text.append(token_text)
+
+        # Move cursor
+        current_pos = offset + len(token_text)
+
+    return "".join(text)
+
+
 class TextEmbeddingProcessor:
     """Processes a bzip2 compressed JSONL file from S3, line by line, and computes
     embeddings."""
@@ -251,26 +283,32 @@ class TextEmbeddingProcessor:
     def compute_embeddings(self, data: JSONType) -> JSONType | None:
         """Computes embeddings for the text in the JSON data."""
 
-        content_item_type = data.get("tp")
+        # content_item_type = data.get("tp")
         embedder = self.args.model_name + "@" + self.args.model_revision
 
-        if content_item_type not in self.args.content_type:
-            self.stats[f"skipped_type_{content_item_type}"] += 1
-            return None
+        # if content_item_type not in self.args.content_type:
+        #     self.stats[f"skipped_type_{content_item_type}"] += 1
+        #     return None
 
         if self.model is None:
             # some newspapers do not contain any valid text, therefore avoiding to load
             # the model if not needed
             self.model = self.load_model()
-
             self.model.to(self.map_location)
             log.info(f"Model moved to device: {next(self.model.parameters()).device}")
 
         log.debug(f"Computing embedding for ID: {data.get('id')}")
-        text = data.get("ft", "")
+
+        # TODO: to move to lingproc
+        # text = data.get("ft", "")
+        sents = data.get("sents", [])
+        text = rebuild_ft_from_offsets(sents)
         textlen = len(text)
+
+        # log.info("Computing embedding for text: %s", text)
         if text and textlen > self.args.min_char_length:
 
+            # TODO: not sure what this is for, could be probably removed
             self.stats[f"char_count_bucket_5k:{ceil(textlen / 5000) * 5000}"] += 1
 
             self.stats["valid_texts"] += 1
