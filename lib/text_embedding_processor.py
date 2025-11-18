@@ -295,7 +295,8 @@ class TextEmbeddingProcessor:
                     convert_to_numpy=True,
                     normalize_embeddings=self.args.normalize_embeddings,
                 )
-                all_embeddings.append([round(n, 5) for n in embedding.tolist()])
+                all_embeddings.append([round(n, 5) for n in embedding])
+
             logging.info(f"Number of chunks: {len(all_embeddings)}")
 
             self.stats.setdefault("chunk_length", []).append(max_tokens)
@@ -331,7 +332,7 @@ class TextEmbeddingProcessor:
             else:
                 embedding = all_embeddings[0]
 
-            result["embedding"] = [round(n, 5) for n in embedding.tolist()]
+            result["embedding"] = [float(round(n, 5)) for n in embedding]
 
             log.debug(f"Computed embedding for ID: {result.get('id')}")
             return result
