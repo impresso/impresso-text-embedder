@@ -1,4 +1,6 @@
 *.d/*
 .env
+.DS_Store
 .idea
+lib/__pycache__/
 config.local.mk
