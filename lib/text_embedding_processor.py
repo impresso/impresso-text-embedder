@@ -15,7 +15,6 @@ import json
 import random
 import logging
 import os
-from math import ceil
 import sys
 import datetime
 from collections import Counter
@@ -170,9 +169,17 @@ class TextEmbeddingProcessor:
             if not text or len(text) <= self.args.min_char_length:
                 self.stats["short_texts"] += 1
                 return None
-            from chonkie import chunk_text
-            chunks = chunk_text(text)
-            texts_to_embed = list(enumerate(chunks))
+            from chonkie import SemanticChunker
+
+            chunker = SemanticChunker(
+                embedding_model="minishlab/potion-base-8M",
+                threshold=0.5,  # Similarity threshold (0-1) or (1-100) or "auto"
+                chunk_size=1024,  # Maximum tokens per chunk
+                min_sentences=5  # Initial sentences per chunk
+            )
+
+            chunks = chunker.chunk(text)
+            texts_to_embed = [chunk.text for chunk in chunks]
 
         if not texts_to_embed:
             return None
