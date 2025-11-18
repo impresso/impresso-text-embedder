@@ -95,7 +95,7 @@ class TextEmbeddingProcessor:
         )
         m = SentenceTransformer(model_name_or_path=self.args.model_name,
                                 trust_remote_code=True,
-                                revision=self.args.model_revision,
+                                revision=self.args.model_revision
                                 )
 
         log.info("Model loaded.")
@@ -126,116 +126,297 @@ class TextEmbeddingProcessor:
             with open(input_path, "rt") as infile:
                 return (line for line in infile)
 
-    def compute_embeddings(self, data: JSONType) -> List[JSONType] | None:
-        """Computes embeddings at the text, sentence, or chunk level depending on args or data structure."""
+    def compute_embeddings(self, data: JSONType) -> JSONType | List[JSONType] | None:
+        """Computes embeddings at the text, sentence, or chunk level depending on args or data structure.
 
-        embedder = self.args.model_name + "@" + self.args.model_revision
+        Returns:
+            - For article/text embeddings: List[JSONType] (one or more flat records)
+            - For sentence embeddings: JSONType matching embeddings-sentence.schema.json
+            - For chunk embeddings: JSONType matching embeddings-chunks.schema.json
+            - None if nothing to embed (too short, filtered type, etc.)
+        """
 
-        # Handle document-type data with "tp"
+        embedder = self.args.model_name + "@" + (self.args.model_revision or "default")
+
+        # Content type filter (tp is content item type)
         content_item_type = data.get("tp")
         if content_item_type and content_item_type not in self.args.content_type:
             self.stats[f"skipped_type_{content_item_type}"] += 1
             return None
 
-        # Detect if this is a sentence-based input (no 'tp' but has 'sents')
-        has_sentences = "sents" in data and isinstance(data["sents"], list)
+        has_sentences = isinstance(data.get("sents"), list)
 
-        # Load model only when needed
+        # Load model lazily
         if self.model is None:
             self.model = self.load_model()
 
-        results = []
-        texts_to_embed = []
+        ci_id = data.get("id")  # canonical content item id
+        lang = data.get("lg")  # if present; optional in schemas
 
-        # Decide what to embed depending on input and embedding level
-        if self.args.embedding_level == "text" and not has_sentences:
+        # --------------------------------------------------------------------------------
+        # HELPER: timestamp in schema format: YYYY-MM-DDTHH:MM:SSZ
+        # --------------------------------------------------------------------------------
+        self.last_timestamp = datetime.datetime.utcnow().replace(microsecond=0)
+        ts_str = self.last_timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # --------------------------------------------------------------------------------
+        # 1) CHUNK-LEVEL EMBEDDINGS  (embeddings-chunks.schema.json)
+        # --------------------------------------------------------------------------------
+        if self.args.embedding_level == "chunk":
             text = data.get("ft", "")
             if not text or len(text) <= self.args.min_char_length:
                 self.stats["short_texts"] += 1
                 return None
-            texts_to_embed = [text]
 
-        elif self.args.embedding_level == "sentence" or has_sentences:
-            sents = data.get("sents", [])
-            for s_idx, s in enumerate(sents):
-                sent_text = " ".join(tok.get("t", "") for tok in s.get("tok", []))
-                if len(sent_text.strip()) > self.args.min_char_length:
-                    texts_to_embed.append((s_idx, sent_text))
-                else:
-                    self.stats["short_texts"] += 1
-
-        elif self.args.embedding_level == "chunk":
-            text = data.get("ft", "")
-            if not text or len(text) <= self.args.min_char_length:
-                self.stats["short_texts"] += 1
-                return None
             from chonkie import SemanticChunker
 
             chunker = SemanticChunker(
                 embedding_model="minishlab/potion-base-8M",
-                threshold=0.5,  # Similarity threshold (0-1) or (1-100) or "auto"
+                threshold=0.5,  # Similarity threshold
                 chunk_size=1024,  # Maximum tokens per chunk
                 min_sentences=5  # Initial sentences per chunk
             )
 
             chunks = chunker.chunk(text)
-            texts_to_embed = [chunk.text for chunk in chunks]
+            if not chunks:
+                return None
 
-        if not texts_to_embed:
-            return None
+            # Prepare texts for encoding
+            chunk_texts = [chunk.text for chunk in chunks]
 
-        # Separate text list for encoding
-        texts = [txt for _, txt in texts_to_embed]
+            start_time = time.time()
+            chunk_embeddings = self.model.encode(
+                chunk_texts,
+                batch_size=8,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=self.args.normalize_embeddings,
+            )
+            end_time = time.time()
 
-        start_time = time.time()
-        embeddings = self.model.encode(
-            texts,
-            batch_size=8,
-            show_progress_bar=False,
-            convert_to_numpy=True,
-            normalize_embeddings=self.args.normalize_embeddings,
-        )
-        end_time = time.time()
+            self.stats["total_time"] += end_time - start_time
+            self.stats["valid_texts"] += len(chunk_texts)
 
-        self.stats["total_time"] += end_time - start_time
-        self.stats["valid_texts"] += len(texts)
-        self.last_timestamp = datetime.datetime.fromtimestamp(end_time, tz=datetime.timezone.utc).replace(microsecond=0)
+            # Build schema-compliant structure
+            chunk_items = []
+            for idx, (chunk, emb_vec) in enumerate(zip(chunks, chunk_embeddings)):
+                emb_list = [round(n, 5) for n in emb_vec.tolist()]
+                size = len(emb_list)
 
-        for (idx, text), emb in zip(texts_to_embed, embeddings):
-            result = {
-                "id": f"{data.get('id')}_{idx}" if len(texts_to_embed) > 1 else data.get("id"),
-                "ts": self.last_timestamp.isoformat() + "Z",
-                "embedder": embedder,
-                "len": len(text),
-                "embedding": [round(n, 5) for n in emb.tolist()],
+                # Try to get character offset from chonkie, but it's optional in schema
+                offset = (
+                        getattr(chunk, "start", None)
+                        or getattr(chunk, "start_char", None)
+                        or None
+                )
+
+                item: JSONType = {
+                    "chunk_id": idx,
+                    "embedding": emb_list,
+                    "size": size,
+                }
+                if lang:
+                    item["lg"] = lang
+                if offset is not None:
+                    item["o"] = offset
+
+                chunk_items.append(item)
+
+            result_doc: JSONType = {
+                "ts": ts_str,
+                "ci_id": ci_id,
+                "chunks": chunk_items,
             }
-            if self.args.include_text:
-                result["text"] = text
-            results.append(result)
 
-        log.debug(f"Computed {len(results)} embeddings for ID: {data.get('id')}")
-        return results
+            # Optional fields: if you have them, you can add them here.
+            # Example (uncomment and adapt when you pass them via args or data):
+            # if hasattr(self.args, "model_id") and self.args.model_id:
+            #     result_doc["model_id"] = self.args.model_id
+            # if "lingproc_path" in data:
+            #     result_doc["lingproc_path"] = data["lingproc_path"]
+            # if hasattr(self.args, "git_commit") and self.args.git_commit:
+            #     result_doc["git"] = self.args.git_commit
+
+            log.debug(f"Computed {len(chunk_items)} chunk embeddings for CI: {ci_id}")
+            return result_doc
+
+        # --------------------------------------------------------------------------------
+        # 2) SENTENCE-LEVEL EMBEDDINGS  (embeddings-sentence.schema.json)
+        #     Also used when embedding_level == "text" but the document already has sents.
+        # --------------------------------------------------------------------------------
+        if self.args.embedding_level == "sentence" or has_sentences:
+            sents = data.get("sents", [])
+            if not sents:
+                return None
+
+            texts_to_embed: list[tuple[int, str, int | None]] = []  # (sent_id, text, offset)
+
+            for s_idx, s in enumerate(sents):
+                # Build sentence text from tokens
+                sent_text = " ".join(tok.get("t", "") for tok in s.get("tok", []))
+                sent_text = sent_text.strip()
+
+                if len(sent_text) > self.args.min_char_length:
+                    # sentence-level offset (optional in schema)
+                    offset = s.get("o") if isinstance(s, dict) else None
+                    texts_to_embed.append((s_idx, sent_text, offset))
+                else:
+                    self.stats["short_texts"] += 1
+
+            if not texts_to_embed:
+                return None
+
+            sent_texts = [txt for _, txt, _ in texts_to_embed]
+
+            start_time = time.time()
+            sent_embeddings = self.model.encode(
+                sent_texts,
+                batch_size=8,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=self.args.normalize_embeddings,
+            )
+            end_time = time.time()
+
+            self.stats["total_time"] += end_time - start_time
+            self.stats["valid_texts"] += len(sent_texts)
+
+            sent_items = []
+            for (sent_id, _txt, offset), emb_vec in zip(texts_to_embed, sent_embeddings):
+                emb_list = [round(n, 5) for n in emb_vec.tolist()]
+                size = len(emb_list)
+
+                item: JSONType = {
+                    "sent_id": sent_id,
+                    "embedding": emb_list,
+                    "size": size,
+                }
+                if lang:
+                    item["lg"] = lang
+                if offset is not None:
+                    item["o"] = offset
+
+                sent_items.append(item)
+
+            result_doc: JSONType = {
+                "ts": ts_str,
+                "ci_id": ci_id,
+                "sents": sent_items,
+            }
+
+            # Optional metadata fields, if available:
+            # if hasattr(self.args, "model_id") and self.args.model_id:
+            #     result_doc["model_id"] = self.args.model_id
+            # if "lingproc_path" in data:
+            #     result_doc["lingproc_path"] = data["lingproc_path"]
+            # if hasattr(self.args, "git_commit") and self.args.git_commit:
+            #     result_doc["git"] = self.args.git_commit
+
+            log.debug(f"Computed {len(sent_items)} sentence embeddings for CI: {ci_id}")
+            return result_doc
+
+        # --------------------------------------------------------------------------------
+        # 3) TEXT / ARTICLE-LEVEL EMBEDDINGS  (flat records, as you had before)
+        # --------------------------------------------------------------------------------
+        if self.args.embedding_level == "text":
+            text = data.get("ft", "")
+            if not text or len(text) <= self.args.min_char_length:
+                self.stats["short_texts"] += 1
+                return None
+
+            texts = [text]
+
+            start_time = time.time()
+            doc_embeddings = self.model.encode(
+                texts,
+                batch_size=8,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=self.args.normalize_embeddings,
+            )
+            end_time = time.time()
+
+            self.stats["total_time"] += end_time - start_time
+            self.stats["valid_texts"] += len(texts)
+
+            results: list[JSONType] = []
+            for emb_vec in doc_embeddings:
+                emb_list = [round(n, 5) for n in emb_vec.tolist()]
+                result: JSONType = {
+                    "id": ci_id,
+                    "ts": ts_str,
+                    "embedder": embedder,
+                    "len": len(text),
+                    "embedding": emb_list,
+                }
+                if self.args.include_text:
+                    result["text"] = text
+                results.append(result)
+
+            log.debug(f"Computed {len(results)} document embeddings for ID: {ci_id}")
+            return results
+
+        # Fallback (should not be reached)
+        return None
 
     def write_embeddings(self, embeddings: Iterator[JSONType]) -> None:
-        """Writes computed embeddings to the output file in JSON format."""
+        """Writes computed embeddings to the output file in JSON format.
+
+        Supports:
+          - List[dict] (article embeddings: one JSON line per embedding)
+          - dict (sentence/chunk schemas: one JSON line per content item)
+        """
         output_file_path = self.args.output_path
         os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+
         with open(output_file_path, "w", encoding="utf-8") as outfile:
             for embedding in embeddings:
-
                 if not embedding:
                     continue
-                log.debug("Writing embedding: %s", embedding.get("id"))
-                outfile.write(
-                    json.dumps(
-                        embedding,
-                        indent=None,
-                        separators=(",", ":"),
-                        ensure_ascii=False,
+
+                # Case 1: article-level: list of flat records
+                if isinstance(embedding, list):
+                    for rec in embedding:
+                        if not rec:
+                            continue
+                        log.debug(
+                            "Writing article embedding: %s",
+                            rec.get("id") or rec.get("ci_id"),
+                        )
+                        outfile.write(
+                            json.dumps(
+                                rec,
+                                indent=None,
+                                separators=(",", ":"),
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                        self.stats["files_created"] += 1
+
+                # Case 2: sentence/chunk-level: top-level dict matching schema
+                elif isinstance(embedding, dict):
+                    log.debug(
+                        "Writing structured embedding for CI: %s",
+                        embedding.get("ci_id") or embedding.get("id"),
                     )
-                    + "\n"
-                )
-                self.stats["files_created"] += 1
+                    outfile.write(
+                        json.dumps(
+                            embedding,
+                            indent=None,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+                    self.stats["files_created"] += 1
+
+                # Unexpected type
+                else:
+                    log.warning(
+                        "Unexpected embedding object of type %s, skipping.",
+                        type(embedding),
+                    )
 
     def file_exists_in_s3(self, bucket: str, key: str) -> bool:
         """Check if a file exists in an S3 bucket."""
