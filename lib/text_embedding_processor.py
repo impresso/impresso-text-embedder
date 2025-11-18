@@ -27,6 +27,7 @@ import torch
 import boto3
 from dotenv import load_dotenv
 import numpy as np
+from transformers import AutoTokenizer
 
 random.seed(42)
 
