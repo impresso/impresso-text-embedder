@@ -73,7 +73,7 @@ newspaper-list-target: $(NEWSPAPERS_TO_PROCESS_FILE)
 # Rule to generate the file containing the newspapers to process
 # we shuffle the newspapers to avoid re-computations by different machines working on the dataset
 #$(NEWSPAPERS_TO_PROCESS_FILE):
-#	python -c \
+	#python -c \
 #	"import lib.s3_to_local_stamps as m; import random; \
 #	s3 = m.get_s3_resource(); \
 #	bucket = s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
@@ -85,18 +85,17 @@ newspaper-list-target: $(NEWSPAPERS_TO_PROCESS_FILE)
 
 # List provider/newspaper pairs
 $(NEWSPAPERS_TO_PROCESS_FILE):
-	python -c \
-	"import lib.s3_to_local_stamps as m; \
-	s3 = m.get_s3_resource(); \
-	bucket = s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
-	providers = bucket.meta.client.list_objects_v2(Bucket=bucket.name, Delimiter='/')['CommonPrefixes']; \
-	newspapers = []; \
-	for p in providers: \
-		pref = p['Prefix']; \
-		subs = bucket.meta.client.list_objects_v2(Bucket=bucket.name, Prefix=pref, Delimiter='/'); \
-		for sp in subs.get('CommonPrefixes', []): \
-			newspapers.append(sp['Prefix'][:-1]); \
-	print(*newspapers)" > $@
+	python -c "import lib.s3_to_local_stamps as m; \
+s3=m.get_s3_resource(); \
+bucket=s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
+top='$(IN_S3_PREFIX_REBUILT)/'; \
+providers=bucket.meta.client.list_objects_v2(Bucket=bucket.name,Prefix=top,Delimiter='/').get('CommonPrefixes',[]); \
+pairs=[]; \
+[pairs.append(p['Prefix'].split('/')[-2] + '/' + sp['Prefix'].split('/')[-2]) \
+ for p in providers \
+ for sp in bucket.meta.client.list_objects_v2(Bucket=bucket.name,Prefix=p['Prefix'],Delimiter='/').get('CommonPrefixes',[])]; \
+print(*pairs)" \
+> $(NEWSPAPERS_TO_PROCESS_FILE)
 
 ###
 # HUGGINGFACE MODEL SETTINGS
@@ -124,10 +123,18 @@ HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
 # Make variables for local paths are defined as OUT_LOCAL_ or IN_LOCAL_
 
 # The input bucket
-IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
+# Split bucket from prefix
+#IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
+#IN_S3_PREFIX_REBUILT ?=
 
+# If using test data, override in config.local.mk:
+IN_S3_BUCKET_REBUILT := 000-processing-test-samples
+IN_S3_PREFIX_REBUILT := lingproc/lingproc-test-v1.0.0
+
+#IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(IN_S3_PREFIX_REBUILT)/$(NEWSPAPER)
 # The input path
-IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
+
+IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(IN_S3_PREFIX_REBUILT)/$(PROVIDER)/$(NEWSPAPER)
   $(call log.debug, IN_S3_PATH_REBUILT)
 
 
