@@ -91,6 +91,9 @@ BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
    ```bash
    make setup
    ```
+   
+6. Make configuration changes as needed in `local.config.mk`, following the example `config.local.sample.mk`.
+
 
 ## Usage
 

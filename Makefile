@@ -71,17 +71,32 @@ NEWSPAPER_YEAR_SORTING ?= shuf
 newspaper-list-target: $(NEWSPAPERS_TO_PROCESS_FILE)
 
 # Rule to generate the file containing the newspapers to process
-# we shuffle the newspapers to avoid recomputations by different machines working on the dataset
+# we shuffle the newspapers to avoid re-computations by different machines working on the dataset
+#$(NEWSPAPERS_TO_PROCESS_FILE):
+#	python -c \
+#	"import lib.s3_to_local_stamps as m; import random; \
+#	s3 = m.get_s3_resource(); \
+#	bucket = s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
+#    result = bucket.meta.client.list_objects_v2(Bucket=bucket.name, Delimiter='/'); \
+#	l = [prefix['Prefix'][:-1] for prefix in result.get('CommonPrefixes', [])]; \
+#	random.shuffle(l); \
+#    print(*l)" \
+#	> $@
+
+# List provider/newspaper pairs
 $(NEWSPAPERS_TO_PROCESS_FILE):
 	python -c \
-	"import lib.s3_to_local_stamps as m; import random; \
+	"import lib.s3_to_local_stamps as m; \
 	s3 = m.get_s3_resource(); \
 	bucket = s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
-    result = bucket.meta.client.list_objects_v2(Bucket=bucket.name, Delimiter='/'); \
-	l = [prefix['Prefix'][:-1] for prefix in result.get('CommonPrefixes', [])]; \
-	random.shuffle(l); \
-    print(*l)" \
-	> $@
+	providers = bucket.meta.client.list_objects_v2(Bucket=bucket.name, Delimiter='/')['CommonPrefixes']; \
+	newspapers = []; \
+	for p in providers: \
+		pref = p['Prefix']; \
+		subs = bucket.meta.client.list_objects_v2(Bucket=bucket.name, Prefix=pref, Delimiter='/'); \
+		for sp in subs.get('CommonPrefixes', []): \
+			newspapers.append(sp['Prefix'][:-1]); \
+	print(*newspapers)" > $@
 
 ###
 # HUGGINGFACE MODEL SETTINGS
@@ -286,7 +301,7 @@ $(OUT_LOCAL_PATH_PROCESSED_DATA).last_synced:
 	touch $@
 
 
-
+# PROCESSING THE TEXT EMBEDDINGS
 # variable for all locally available rebuilt stamp files. Needed for dependency tracking
 # of the build process. We discard errors as the path or file might not exist yet.
 local-rebuilt-stamp-files := \
