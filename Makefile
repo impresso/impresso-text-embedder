@@ -130,9 +130,12 @@ IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
 IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
   $(call log.debug, IN_S3_PATH_REBUILT)
 
+
 # The local path
+#IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
+#  $(call log.debug, IN_LOCAL_PATH_REBUILT)
 IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
-  $(call log.debug, IN_LOCAL_PATH_REBUILT)
+# where NEWSPAPER = PROVIDER/NEWSPAPER
 
 
 ###
@@ -223,7 +226,7 @@ setup:
 setup-hf-model:
 	# 
 	# DOWNLOADING THE HUGGINGFACE MODEL
-	python3 -c "from sentence_transformers import SentenceTransformer as st; \
+	python -c "from sentence_transformers import SentenceTransformer as st; \
 	m = st('$(HF_FULL_MODEL_NAME)', revision='$(HF_MODEL_VERSION)',trust_remote_code=True); \
 	len(m.encode('This is a test!')) or exit(1)"
 	# OK: DOWNLOADING THE HUGGINGFACE MODEL DONE
@@ -232,7 +235,7 @@ setup-hf-model:
 check-python-installation:
 	#
 	# TEST YOUR PYTHON ENVIRONMENT...
-	python3 -c "import sentence_transformers as st; import smart_open;" || \
+	python -c "import sentence_transformers as st; import smart_open;" || \
 	{ echo "Double check whether the required python packages are installed! or you running in the correct python environment!" ; exit 1; }
 	# OK: YOUR PYTHON ENVIRONMENT IS FINE!
 
@@ -304,10 +307,16 @@ $(OUT_LOCAL_PATH_PROCESSED_DATA).last_synced:
 # PROCESSING THE TEXT EMBEDDINGS
 # variable for all locally available rebuilt stamp files. Needed for dependency tracking
 # of the build process. We discard errors as the path or file might not exist yet.
+#local-rebuilt-stamp-files := \
+#    $(shell ls -r $(IN_LOCAL_PATH_REBUILT)/*.jsonl.bz2.stamp 2> /dev/null \
+#      |$(if $(NEWSPAPER_YEAR_SORTING),$(NEWSPAPER_YEAR_SORTING),cat))
+#  $(call log.debug, local-rebuilt-stamp-files)
+
+# Collect all local stamp files inside the provider/newspaper folder
 local-rebuilt-stamp-files := \
-    $(shell ls -r $(IN_LOCAL_PATH_REBUILT)/*.jsonl.bz2.stamp 2> /dev/null \
-      |$(if $(NEWSPAPER_YEAR_SORTING),$(NEWSPAPER_YEAR_SORTING),cat))
-  $(call log.debug, local-rebuilt-stamp-files)
+    $(shell find $(IN_LOCAL_PATH_REBUILT) -maxdepth 1 -name '*.jsonl.bz2.stamp' 2>/dev/null \
+        | $(if $(NEWSPAPER_YEAR_SORTING),$(NEWSPAPER_YEAR_SORTING),cat))
+$(call log.debug, local-rebuilt-stamp-files)
 
 define local_rebuilt_stamp_to_local_textembedding_file
 $(1:$(IN_LOCAL_PATH_REBUILT)/%.jsonl.bz2.stamp=$(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2)
@@ -371,9 +380,13 @@ help:
 
 # function to turn a local file path into a s3 file path, optionall cutting off the
 # suffix given as argument
+#define local_to_s3
+#$(subst $(2),,$(subst $(BUILD_DIR),s3:/,$(1)))
+#endef
 define local_to_s3
-$(subst $(2),,$(subst $(BUILD_DIR),s3:/,$(1)))
+$(subst $(2),,$(subst $(BUILD_DIR),s3://,$(1)))
 endef
+
 # Doctests for local_to_s3 function
 
 # Example 1: Convert local path to S3 path without stripping any suffix
