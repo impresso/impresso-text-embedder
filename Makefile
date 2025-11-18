@@ -48,8 +48,8 @@ BUILD_DIR ?= build.d
 
 # Specify the newspaper to process. Just a suffix appended to the s3 bucket name
 # s3 is ok!  Can also be actionfem/actionfem-1933
-NEWSPAPER ?= actionfem
-  $(call log.info, NEWSPAPER)
+#NEWSPAPER ?= actionfem
+#  $(call log.info, NEWSPAPER)
 
 
 # A file containing a space-separated line with all newspapers to process
@@ -108,8 +108,9 @@ HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
 # If more than one input is needed, the variable names are IN_1_S3_ or OUT_2_S3_
 # Make variables for local paths are defined as OUT_LOCAL_ or IN_LOCAL_
 
-# The input bucket
-IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
+## The input bucket
+# MOVED TO config.local.mk
+#IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
 
 # The input path
 IN_S3_PATH_REBUILT := s3://$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
@@ -123,12 +124,12 @@ IN_LOCAL_PATH_REBUILT := $(BUILD_DIR)/$(IN_S3_BUCKET_REBUILT)/$(NEWSPAPER)
 ###
 # DEFINING THE OUTPUT PATHS
 
-# The output bucket
-OUT_S3_BUCKET_PROCESSED_DATA ?= 42-processed-data-final
-
-# The output infix and version see internal documentation for more file structure information
-OUT_S3_PROCESSED_INFIX ?= textembeddings-$(HF_MODEL_NAME)
-OUT_S3_PROCESSED_VERSION ?= v1.0.0
+# MOVE TO config.local.mk
+## The output bucket
+#OUT_S3_BUCKET_PROCESSED_DATA ?= 42-processed-data-final
+## The output infix and version see internal documentation for more file structure information
+#OUT_S3_PROCESSED_INFIX ?= textembeddings-$(HF_MODEL_NAME)
+#OUT_S3_PROCESSED_VERSION ?= v1.0.0
 
 # The s3 output path
 OUT_S3_PATH_PROCESSED_DATA := s3://$(OUT_S3_BUCKET_PROCESSED_DATA)/$(OUT_S3_PROCESSED_INFIX)/$(OUT_S3_PROCESSED_VERSION)/$(NEWSPAPER)
@@ -137,9 +138,6 @@ OUT_S3_PATH_PROCESSED_DATA := s3://$(OUT_S3_BUCKET_PROCESSED_DATA)/$(OUT_S3_PROC
 # The local path in BUILD_DIR
 OUT_LOCAL_PATH_PROCESSED_DATA := $(BUILD_DIR)/$(OUT_S3_BUCKET_PROCESSED_DATA)/$(OUT_S3_PROCESSED_INFIX)/$(OUT_S3_PROCESSED_VERSION)/$(NEWSPAPER)
   $(call log.debug, OUT_LOCAL_PATH_PROCESSED_DATA)
-
-
-
 
 ###
 # TEXT EMBEDDING PROCESSOR SETTINGS
@@ -157,20 +155,19 @@ EMBEDDING_MIN_CHAR_LENGTH ?= 800
 
 # Set the types of content items to embed. The default is to embed articles.
 # Possible types are: ar, page
+# TODO: allow multiple content types?
 EMBEDDING_CONTENT_TYPE_OPTION ?= --content-type ar
   $(call log.debug, EMBEDDING_CONTENT_TYPE_OPTION)
 
-
 ###
 # S3 STORAGE UPDATE SETTINGS
-
 # Prevent any output to s3 even if s3-output-path is set
 # EMBEDDING_S3_OUTPUT_DRY_RUN?= --s3-output-dry-run
 # To disable the dry-run mode, comment the line above and uncomment the line below
 EMBEDDING_S3_OUTPUT_DRY_RUN ?=
   $(call log.debug, EMBEDDING_S3_OUTPUT_DRY_RUN)
 
-# Keep only the local timestam output files after uploading (only relevant when
+# Keep only the local timestamp output files after uploading (only relevant when
 # uploading to s3)
 #
 EMBEDDING_KEEP_TIMESTAMP_ONLY_OPTION ?= --keep-timestamp-only
