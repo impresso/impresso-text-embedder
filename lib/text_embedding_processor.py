@@ -29,9 +29,7 @@ from dotenv import load_dotenv
 from utils import print_log_message_summary
 
 random.seed(42)
-
 log = logging.getLogger(__name__)
-
 JSONType = Dict[str, Any]
 
 
@@ -129,67 +127,87 @@ class TextEmbeddingProcessor:
             with open(input_path, "rt") as infile:
                 return (line for line in infile)
 
-    def compute_embeddings(self, data: JSONType) -> JSONType | None:
-        """Computes embeddings for the text in the JSON data."""
+    def compute_embeddings(self, data: JSONType) -> List[JSONType] | None:
+        """Computes embeddings at the text, sentence, or chunk level depending on args or data structure."""
 
-        content_item_type = data.get("tp")
         embedder = self.args.model_name + "@" + self.args.model_revision
 
-        if content_item_type not in self.args.content_type:
+        # Handle document-type data with "tp"
+        content_item_type = data.get("tp")
+        if content_item_type and content_item_type not in self.args.content_type:
             self.stats[f"skipped_type_{content_item_type}"] += 1
             return None
 
+        # Detect if this is a sentence-based input (no 'tp' but has 'sents')
+        has_sentences = "sents" in data and isinstance(data["sents"], list)
+
+        # Load model only when needed
         if self.model is None:
-            # some newspapers do not contain any valid text, therefore avoiding loading
-            # the model if not needed
             self.model = self.load_model()
-        log.debug(f"Computing embedding for ID: {data.get('id')}")
-        text = data.get("ft", "")
-        textlen = len(text)
-        if text and textlen > self.args.min_char_length:
 
-            self.stats[f"char_count_bucket_5k:{ceil(textlen / 5000) * 5000}"] += 1
+        results = []
+        texts_to_embed = []
 
-            self.stats["valid_texts"] += 1
-            self.stats[f"valid_texts_lg:{data.get('lang')}"] += 1
-            start_time = time.time()  # Start timing
-            embedding = self.model.encode(
-                text,
-                batch_size=1,
-                show_progress_bar=False,
-                convert_to_numpy=True,
-                normalize_embeddings=self.args.normalize_embeddings,
-            )
-            end_time = time.time()  # End timing
-            self.stats["total_time"] += (
-                    end_time - start_time
-            )  # Accumulate processing time
+        # Decide what to embed depending on input and embedding level
+        if self.args.embedding_level == "text" and not has_sentences:
+            text = data.get("ft", "")
+            if not text or len(text) <= self.args.min_char_length:
+                self.stats["short_texts"] += 1
+                return None
+            texts_to_embed = [text]
 
-            self.last_timestamp = datetime.datetime.fromtimestamp(
-                end_time, tz=datetime.timezone.utc
-            ).replace(microsecond=0)
+        elif self.args.embedding_level == "sentence" or has_sentences:
+            sents = data.get("sents", [])
+            for s_idx, s in enumerate(sents):
+                sent_text = " ".join(tok.get("t", "") for tok in s.get("tok", []))
+                if len(sent_text.strip()) > self.args.min_char_length:
+                    texts_to_embed.append((s_idx, sent_text))
+                else:
+                    self.stats["short_texts"] += 1
 
-            if self.stats["valid_texts"] % 100 == 0:
-                log.info(f"Processed {self.stats['valid_texts']} valid texts.")
+        elif self.args.embedding_level == "chunk":
+            text = data.get("ft", "")
+            if not text or len(text) <= self.args.min_char_length:
+                self.stats["short_texts"] += 1
+                return None
+            from chonkie import chunk_text
+            chunks = chunk_text(text)
+            texts_to_embed = list(enumerate(chunks))
 
+        if not texts_to_embed:
+            return None
+
+        # Separate text list for encoding
+        texts = [txt for _, txt in texts_to_embed]
+
+        start_time = time.time()
+        embeddings = self.model.encode(
+            texts,
+            batch_size=8,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+            normalize_embeddings=self.args.normalize_embeddings,
+        )
+        end_time = time.time()
+
+        self.stats["total_time"] += end_time - start_time
+        self.stats["valid_texts"] += len(texts)
+        self.last_timestamp = datetime.datetime.fromtimestamp(end_time, tz=datetime.timezone.utc).replace(microsecond=0)
+
+        for (idx, text), emb in zip(texts_to_embed, embeddings):
             result = {
-                "id": data.get("id"),
+                "id": f"{data.get('id')}_{idx}" if len(texts_to_embed) > 1 else data.get("id"),
                 "ts": self.last_timestamp.isoformat() + "Z",
                 "embedder": embedder,
-                "len": textlen,
+                "len": len(text),
+                "embedding": [round(n, 5) for n in emb.tolist()],
             }
-
             if self.args.include_text:
                 result["text"] = text
+            results.append(result)
 
-            result["embedding"] = [round(n, 5) for n in embedding.tolist()]
-
-            log.debug(f"Computed embedding for ID: {result.get('id')}")
-            return result
-        else:
-            self.stats["short_texts"] += 1
-
-        return None
+        log.debug(f"Computed {len(results)} embeddings for ID: {data.get('id')}")
+        return results
 
     def write_embeddings(self, embeddings: Iterator[JSONType]) -> None:
         """Writes computed embeddings to the output file in JSON format."""

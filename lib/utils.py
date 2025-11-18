@@ -1,3 +1,7 @@
+import logging
+
+log = logging.getLogger(__name__)
+
 
 def print_log_message_summary(highest_level: str):
     """Prints a summary of the log messages relevant to the specified log level."""
@@ -107,4 +111,3 @@ def print_log_message_summary(highest_level: str):
     for help_message in statistics_help:
         log.info(f" - {help_message}")
     log.info("End of Statistics HELP.")
-
