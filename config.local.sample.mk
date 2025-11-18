@@ -40,7 +40,7 @@ HF_HOME ?= ./hf.d
 MAKE_PARALLEL_OPTION ?= --jobs 2
 
 # If you want to restrict the newspaper to work on
-NEWSPAPER ?= actionfem
+NEWSPAPER ?= SNL/EXP
 
 # suppress the logging output of make itself 
 LOGGING_LEVEL := WARNING
