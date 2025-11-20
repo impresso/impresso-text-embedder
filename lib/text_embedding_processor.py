@@ -65,6 +65,25 @@ def rebuild_ft_from_offsets(sents):
     return "".join(text)
 
 
+def rebuild_sentence_from_offsets(sent):
+    toks = sorted(sent.get("tok", []), key=lambda x: x["o"])
+
+    text = []
+    current_pos = toks[0]["o"]
+
+    for tok in toks:
+        offset = tok["o"]
+        token_text = tok["t"]
+
+        if offset > current_pos:
+            text.append(" " * (offset - current_pos))
+
+        text.append(token_text)
+        current_pos = offset + len(token_text)
+
+    return "".join(text).strip()
+
+
 class TextEmbeddingProcessor:
     """Processes a bzip2 compressed JSONL file from S3, line by line, and computes
     embeddings."""
@@ -296,7 +315,7 @@ class TextEmbeddingProcessor:
 
             for s_idx, s in tqdm(enumerate(sents), total=len(sents)):
                 # Build sentence text from tokens
-                sent_text = " ".join(tok.get("t", "") for tok in s.get("tok", []))
+                sent_text = rebuild_sentence_from_offsets(s)
                 sent_text = sent_text.strip()
 
                 if len(sent_text) > self.args.min_char_length:
