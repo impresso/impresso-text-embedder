@@ -33,7 +33,7 @@ HF_FULL_MODEL_NAME := $(CREATOR_NAME)/$(HF_MODEL_NAME)
   $(call log.debug, HF_FULL_MODEL_NAME)
 
 # The embedding level option: text, sentence or chunk
-EMBEDDING_LEVEL_OPTION := text
+EMBEDDING_LEVEL_OPTION := sentence
 
 # The input bucket
 IN_S3_PREFIXES := lingproc/lingproc-test-v1.0.0
@@ -44,6 +44,13 @@ OUT_S3_BUCKET_PROCESSED_DATA := 140-processed-data-sandbox
 # The output infix and version see internal documentation for more file structure information
 OUT_S3_PROCESSED_INFIX := textembeddings-$(HF_MODEL_NAME)
 OUT_S3_PROCESSED_VERSION := v1.0.1
+
+
+# Set the minimum character length for the text to be included for embedding.
+# Texts shorter than this length will not be embedded and will be skipped entirely (not showing up in the output at all).
+# Set to 10 by default because for sentences 800 characters is too long and 5 is too short.
+EMBEDDING_MIN_CHAR_LENGTH := 10
+  $(call log.debug, EMBEDDING_MIN_CHAR_LENGTH)
 
 # HUGGINGFACE MODEL SETTINGS
 # set the model cache directory to a local project directory (default:

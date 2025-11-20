@@ -131,10 +131,6 @@ OUT_LOCAL_PATH_PROCESSED_DATA := $(BUILD_DIR)/$(OUT_S3_BUCKET_PROCESSED_DATA)/$(
 EMBEDDING_INCLUDE_TEXT_OPTION ?=
   $(call log.debug, EMBEDDING_INCLUDE_TEXT_OPTION)
 
-# Set the minimum character length for the text to be included for embedding.
-# Texts shorter than this length will not be embedded and will be skipped entirely (not showing up in the output at all).
-EMBEDDING_MIN_CHAR_LENGTH ?= 800
-  $(call log.debug, EMBEDDING_MIN_CHAR_LENGTH)
 
 # Set the types of content items to embed. The default is to embed articles.
 # Possible types are: ar, page
