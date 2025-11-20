@@ -1,21 +1,18 @@
 # Sample file for local configurations. Copy this file to config.local.mk and it will be
 # included by the main Makefile.
 
-# inform the user about this configuratio!
+# inform the user about this configuration!
 $(info Make: Including config.local.mk: $(shell readlink -f config.local.mk))
-
-
 
 # Typical adaptations
 # if NAME is already set to a non-empty value, it will not be overwritten!
 # NAME ?= VALUE
-
 # NAME will be set to this VALUE, even if it was already set!
 # NAME := VALUE
-
 # Warning: Never add a trailing # comment after a variable assignment, it will break the
 # code!
 # NAME := VALUE # THIS WILL BREAK THE CODE!
+
 # The s3 output path is computed from 3 make variables.
 # You can set two of them here! OUT_S3_BUCKET_PROCESSED_DATA and OUT_S3_PROCESSED_VERSION
 # Don't change the OUT_S3_PROCESSED_INFIX!
@@ -34,6 +31,9 @@ HF_MODEL_NAME := gte-multilingual-base
 HF_MODEL_VERSION := f7d567e
 HF_FULL_MODEL_NAME := $(CREATOR_NAME)/$(HF_MODEL_NAME)
   $(call log.debug, HF_FULL_MODEL_NAME)
+
+# The embedding level option: text, sentence or chunk
+EMBEDDING_LEVEL_OPTION := text
 
 # The input bucket
 IN_S3_PREFIXES := lingproc/lingproc-test-v1.0.0
