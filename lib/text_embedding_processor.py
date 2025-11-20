@@ -15,9 +15,9 @@ import json
 import random
 import logging
 import os
-from math import ceil
 import sys
 import datetime
+from tqdm import tqdm
 from collections import Counter
 import time
 from smart_open import open
@@ -26,124 +26,11 @@ from sentence_transformers import SentenceTransformer
 import torch
 import boto3
 from dotenv import load_dotenv
-import numpy as np
-from transformers import AutoTokenizer
+from utils import print_log_message_summary
 
 random.seed(42)
-
 log = logging.getLogger(__name__)
-
 JSONType = Dict[str, Any]
-
-
-def print_log_message_summary(highest_level: str):
-    """Prints a summary of the log messages relevant to the specified log level."""
-    log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-    level_index = log_levels.index(highest_level.upper())
-
-    summary = {
-        "INFO": [
-            "Arguments: {arguments}: Logs the command-line arguments passed.",
-            (
-                "Processing file %s: Indicates the start of file processing for a given"
-                " file path."
-            ),
-            "Type of embeddings: %s: Logs the type of the embeddings object.",
-            "Processed %s valid texts: Logs after every 100 valid texts are processed.",
-            (
-                "Model loaded: Indicates that the embedding model has been successfully"
-                " loaded."
-            ),
-            (
-                "Reading from S3: %s: Indicates that a file is being read from an S3"
-                " bucket."
-            ),
-            (
-                "Finished reading %s lines from S3: %s: Logs after completing reading"
-                " from an S3 file."
-            ),
-            (
-                "Uploading %s to s3://%s/%s: Logs when a file is about to be uploaded"
-                " to S3."
-            ),
-            (
-                "Successfully uploaded %s to s3://%s/%s: Logs a successful file upload"
-                " to S3."
-            ),
-        ],
-        "WARNING": [
-            (
-                "The file s3://%s/%s already exists. Silently quitting: Warns that a"
-                " file already exists in S3 and the process is exiting."
-            ),
-            (
-                "Output path %s exists and --no-overwrite is set: Warns that the output"
-                " file already exists and --no-overwrite prevents further processing."
-            ),
-        ],
-        "ERROR": [
-            (
-                "The file %s was not found: Logs an error when the file to upload"
-                " cannot be found locally."
-            ),
-            "Credentials not available: Indicates that AWS credentials are missing.",
-            (
-                "S3 output path must start with 's3://': Logs an error when an invalid"
-                " S3 path is provided."
-            ),
-        ],
-        "DEBUG": [
-            (
-                "Computing embedding for ID: {data.get('id')}: Logs that an embedding"
-                " is being computed for a specific document ID."
-            ),
-            (
-                "Writing embedding: %s: Logs when an embedding is being written to the"
-                " output file."
-            ),
-            (
-                "Computed embedding for ID: {result.get('id')}: Logs after the"
-                " embedding for a specific document ID has been computed."
-            ),
-        ],
-    }
-    statistics_help = [
-        (
-            "valid_texts: The number of valid texts processed that meet the minimum"
-            " character length."
-        ),
-        "short_texts: The number of texts that were too short to be processed.",
-        "total_time: The total time taken for processing all valid texts.",
-        (
-            "char_count_bucket_5k:{N}: The number of texts with character counts in"
-            " buckets of 5000 characters."
-        ),
-        (
-            "valid_texts_lg:{lang}: The number of valid texts processed for a specific"
-            " language."
-        ),
-        "files_created: The number of output files created during the process.",
-        (
-            "Average time per valid text: The average time taken to process each valid"
-            " text."
-        ),
-        (
-            "skipped_type_{type}: The number of texts skipped due to their type not"
-            " matching the allowed content types. For example, `skipped_type_ad` means"
-            " texts of type 'ad' were skipped."
-        ),
-    ]
-    log.info(f"Log Message HELP for level {highest_level.upper()}:")
-    for level in log_levels[level_index:]:
-        if level in summary:
-            log.info(f"Log Level: {level}")
-            for message in summary[level]:
-                log.info(f" - {message}")
-    log.info("End of Log Message HELP.")
-    log.info("Begin of Statistics HELP:")
-    for help_message in statistics_help:
-        log.info(f" - {help_message}")
-    log.info("End of Statistics HELP.")
 
 
 def rebuild_ft_from_offsets(sents):
@@ -203,7 +90,6 @@ class TextEmbeddingProcessor:
         self.model = None
         self.stats = Counter(valid_texts=0, short_texts=0, total_time=0)
         self.last_timestamp = None  # UTC timestamp of the last processed document
-        self.map_location = "cuda" if torch.cuda.is_available() else "cpu"
 
     def run(self) -> None:
         """Orchestrates the file processing based on S3 objects or local files."""
@@ -242,7 +128,7 @@ class TextEmbeddingProcessor:
         )
         m = SentenceTransformer(model_name_or_path=self.args.model_name,
                                 trust_remote_code=True,
-                                revision=self.args.model_revision,
+                                revision=self.args.model_revision
                                 )
 
         log.info("Model loaded.")
@@ -273,132 +159,311 @@ class TextEmbeddingProcessor:
             with open(input_path, "rt") as infile:
                 return (line for line in infile)
 
-    def chunk_text_exact(self, text: str, tokenizer: AutoTokenizer,
-                         max_subtokens: int) -> Generator[str, None, None]:
-        subtokens = tokenizer.encode(text, add_special_tokens=False)
-        for i in range(0, len(subtokens), max_subtokens):
-            chunk = subtokens[i: i + max_subtokens]
-            yield tokenizer.decode(chunk, skip_special_tokens=True, clean_up_tokenization_spaces=True)
+    def compute_embeddings(self, data: JSONType) -> JSONType | List[JSONType] | None:
+        """Computes embeddings at the text, sentence, or chunk level depending on args or data structure.
 
-    def compute_embeddings(self, data: JSONType) -> JSONType | None:
-        """Computes embeddings for the text in the JSON data."""
+        Returns:
+            - For article/text embeddings: List[JSONType] (one or more flat records)
+            - For sentence embeddings: JSONType matching embeddings-sentence.schema.json
+            - For chunk embeddings: JSONType matching embeddings-chunks.schema.json
+            - None if nothing to embed (too short, filtered type, etc.)
+        """
 
-        # content_item_type = data.get("tp")
-        embedder = self.args.model_name + "@" + self.args.model_revision
+        embedder = self.args.model_name + "@" + (self.args.model_revision or "default")
 
-        # if content_item_type not in self.args.content_type:
-        #     self.stats[f"skipped_type_{content_item_type}"] += 1
-        #     return None
+        # Content type filter (tp is content item type)
+        content_item_type = data.get("tp")
+        if content_item_type and content_item_type not in self.args.content_type:
+            self.stats[f"skipped_type_{content_item_type}"] += 1
+            return None
 
+        has_sentences = isinstance(data.get("sents"), list)
+
+        # Load model lazily
         if self.model is None:
-            # some newspapers do not contain any valid text, therefore avoiding to load
-            # the model if not needed
             self.model = self.load_model()
-            self.model.to(self.map_location)
-            log.info(f"Model moved to device: {next(self.model.parameters()).device}")
 
-        log.debug(f"Computing embedding for ID: {data.get('id')}")
+        ci_id = data.get("id")  # canonical content item id
+        lang = data.get("lg")  # if present; optional in schemas
+
+        # --------------------------------------------------------------------------------
+        # HELPER: timestamp in schema format: YYYY-MM-DDTHH:MM:SSZ
+        # --------------------------------------------------------------------------------
+        self.last_timestamp = datetime.datetime.utcnow().replace(microsecond=0)
+        ts_str = self.last_timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # --------------------------------------------------------------------------------
+        # 1) CHUNK-LEVEL EMBEDDINGS  (embeddings-chunks.schema.json)
+        # --------------------------------------------------------------------------------
 
         # TODO: to move to lingproc
         # text = data.get("ft", "")
         sents = data.get("sents", [])
         text = rebuild_ft_from_offsets(sents)
         textlen = len(text)
+        log.info(
+            f"Computing embedding for ID: {ci_id}, text length: {textlen}, at the {self.args.embedding_level} level")
 
-        # log.info("Computing embedding for text: %s", text)
-        if text and textlen > self.args.min_char_length:
+        if self.args.embedding_level == "chunk":
+            if not text or textlen <= self.args.min_char_length:
+                self.stats["short_texts"] += 1
+                return None
 
-            # TODO: not sure what this is for, could be probably removed
-            self.stats[f"char_count_bucket_5k:{ceil(textlen / 5000) * 5000}"] += 1
+            from chonkie import SemanticChunker
 
-            self.stats["valid_texts"] += 1
-            self.stats[f"valid_texts_lg:{data.get('lang')}"] += 1
-
-            # Initialize a list to hold embeddings from all chunks
-            all_embeddings = []
-
-            start_time = time.time()  # Start timing
-
-            special_tokens = self.model.tokenizer.num_special_tokens_to_add(pair=False)
-            max_tokens = self.model.tokenizer.model_max_length - special_tokens  # Actual chunk content budget
-            logging.info(
-                f"Max tokens: {max_tokens}, length of text (tokens): {len(self.model.tokenizer.encode(text, add_special_tokens=False))}"
+            chunker = SemanticChunker(
+                embedding_model="minishlab/potion-base-8M",
+                threshold=0.5,  # Similarity threshold
+                chunk_size=1024,  # Maximum tokens per chunk
+                min_sentences=5  # Initial sentences per chunk
             )
-            # Split text into chunks and process each chunk
-            for chunk in self.chunk_text_exact(text, self.model.tokenizer, max_tokens):
-                embedding = self.model.encode(
-                    chunk,
-                    batch_size=1,
-                    show_progress_bar=False,
-                    convert_to_numpy=True,
-                    normalize_embeddings=self.args.normalize_embeddings,
+
+            chunks = chunker.chunk(text)
+            if not chunks:
+                return None
+
+            # Prepare texts for encoding
+            chunk_texts = [chunk.text for chunk in chunks]
+
+            start_time = time.time()
+            chunk_embeddings = self.model.encode(
+                chunk_texts,
+                batch_size=8,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=self.args.normalize_embeddings,
+            )
+            end_time = time.time()
+
+            self.stats["total_time"] += end_time - start_time
+            self.stats["valid_texts"] += len(chunk_texts)
+
+            # Build schema-compliant structure
+            chunk_items = []
+            for idx, (chunk, emb_vec) in enumerate(
+                    tqdm(zip(chunks, chunk_embeddings), total=len(chunks))
+            ):
+                emb_list = [round(n, 5) for n in emb_vec.tolist()]
+                size = len(emb_list)
+
+                # Try to get character offset from chonkie, but it's optional in schema
+                offset = (
+                        getattr(chunk, "start", None)
+                        or getattr(chunk, "start_char", None)
+                        or None
                 )
-                all_embeddings.append([round(n, 5) for n in embedding])
 
-            logging.info(f"Number of chunks: {len(all_embeddings)}")
+                item: JSONType = {
+                    "chunk_id": idx,
+                    "embedding": emb_list,
+                    "size": size,
+                }
+                if lang:
+                    item["lg"] = lang
+                if offset is not None:
+                    item["o"] = offset
 
-            self.stats.setdefault("chunk_length", []).append(max_tokens)
-            self.stats.setdefault("chunks", []).append(len(all_embeddings))
+                chunk_items.append(item)
 
-            end_time = time.time()  # End timing
-            self.stats["total_time"] += (
-                    end_time - start_time
-            )  # Accumulate processing time
-
-            self.last_timestamp = datetime.datetime.fromtimestamp(
-                end_time, tz=datetime.timezone.utc
-            ).replace(microsecond=0)
-
-            if self.stats["valid_texts"] % 100 == 0:
-                log.info(f"Processed {self.stats['valid_texts']} valid texts.")
-
-            result = {
-                "id": data.get("id"),
-                "ts": self.last_timestamp.isoformat() + "Z",
-                "embedder": embedder,
-                "len": textlen,
-                "chunks": len(all_embeddings),
-                "chunk_length": max_tokens,
-                "embedding_type": "page",
+            result_doc: JSONType = {
+                "ts": ts_str,
+                "ci_id": ci_id,
+                "chunks": chunk_items,
             }
 
-            if self.args.include_text:
-                result["text"] = text
+            # Optional fields: if you have them, you can add them here.
+            # Example (uncomment and adapt when you pass them via args or data):
+            # if hasattr(self.args, "model_id") and self.args.model_id:
+            #     result_doc["model_id"] = self.args.model_id
+            # if "lingproc_path" in data:
+            #     result_doc["lingproc_path"] = data["lingproc_path"]
+            # if hasattr(self.args, "git_commit") and self.args.git_commit:
+            #     result_doc["git"] = self.args.git_commit
 
-            if len(all_embeddings) > 1:
-                embedding = np.mean(np.stack(all_embeddings), axis=0)
-            else:
-                embedding = all_embeddings[0]
+            log.debug(f"Computed {len(chunk_items)} chunk embeddings for CI: {ci_id}")
+            return result_doc
 
-            result["embedding"] = [float(round(n, 5)) for n in embedding]
+        # --------------------------------------------------------------------------------
+        # 2) SENTENCE-LEVEL EMBEDDINGS  (embeddings-sentence.schema.json)
+        #     Also used when embedding_level == "text" but the document already has sents.
+        # --------------------------------------------------------------------------------
+        elif self.args.embedding_level == "sentence" and has_sentences:
+            sents = data.get("sents", [])
+            if not sents:
+                return None
 
-            log.debug(f"Computed embedding for ID: {result.get('id')}")
-            return result
-        else:
-            self.stats["short_texts"] += 1
+            texts_to_embed: list[tuple[int, str, int | None]] = []  # (sent_id, text, offset)
 
+            for s_idx, s in tqdm(enumerate(sents), total=len(sents)):
+                # Build sentence text from tokens
+                sent_text = " ".join(tok.get("t", "") for tok in s.get("tok", []))
+                sent_text = sent_text.strip()
+
+                if len(sent_text) > self.args.min_char_length:
+                    # sentence-level offset (optional in schema)
+                    offset = s.get("o") if isinstance(s, dict) else None
+                    texts_to_embed.append((s_idx, sent_text, offset))
+                else:
+                    self.stats["short_texts"] += 1
+
+            if not texts_to_embed:
+                return None
+
+            sent_texts = [txt for _, txt, _ in texts_to_embed]
+
+            start_time = time.time()
+            sent_embeddings = self.model.encode(
+                sent_texts,
+                batch_size=8,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=self.args.normalize_embeddings,
+            )
+            end_time = time.time()
+
+            self.stats["total_time"] += end_time - start_time
+            self.stats["valid_texts"] += len(sent_texts)
+
+            sent_items = []
+            for (sent_id, _txt, offset), emb_vec in tqdm(
+                    zip(texts_to_embed, sent_embeddings),
+                    total=len(texts_to_embed),
+                    desc="Sentence embeddings"
+            ):
+                emb_list = [round(n, 5) for n in emb_vec.tolist()]
+                size = len(emb_list)
+
+                item: JSONType = {
+                    "sent_id": sent_id,
+                    "embedding": emb_list,
+                    "size": size,
+                }
+                if lang:
+                    item["lg"] = lang
+                if offset is not None:
+                    item["o"] = offset
+
+                sent_items.append(item)
+
+            result_doc: JSONType = {
+                "ts": ts_str,
+                "ci_id": ci_id,
+                "sents": sent_items,
+            }
+
+            # Optional metadata fields, if available:
+            # if hasattr(self.args, "model_id") and self.args.model_id:
+            #     result_doc["model_id"] = self.args.model_id
+            # if "lingproc_path" in data:
+            #     result_doc["lingproc_path"] = data["lingproc_path"]
+            # if hasattr(self.args, "git_commit") and self.args.git_commit:
+            #     result_doc["git"] = self.args.git_commit
+
+            log.debug(f"Computed {len(sent_items)} sentence embeddings for CI: {ci_id}")
+            return result_doc
+
+        # --------------------------------------------------------------------------------
+        # 3) TEXT / ARTICLE-LEVEL EMBEDDINGS  (flat records, as you had before)
+        # --------------------------------------------------------------------------------
+        elif self.args.embedding_level == "text":
+            if not text or textlen <= self.args.min_char_length:
+                log.info("Skipping text embedding due to too short text")
+                self.stats["short_texts"] += 1
+                return None
+
+            texts = [text]
+
+            start_time = time.time()
+            doc_embeddings = self.model.encode(
+                texts,
+                batch_size=8,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=self.args.normalize_embeddings,
+            )
+            end_time = time.time()
+
+            self.stats["total_time"] += end_time - start_time
+            self.stats["valid_texts"] += len(texts)
+
+            results: list[JSONType] = []
+            for emb_vec in doc_embeddings:
+                emb_list = [round(n, 5) for n in emb_vec.tolist()]
+                result: JSONType = {
+                    "id": ci_id,
+                    "ts": ts_str,
+                    "embedder": embedder,
+                    "len": len(text),
+                    "embedding": emb_list,
+                }
+                if self.args.include_text:
+                    result["text"] = text
+                results.append(result)
+
+            log.debug(f"Computed {len(results)} document embeddings for ID: {ci_id}")
+            return results
+
+        # Fallback (should not be reached)
         return None
 
     def write_embeddings(self, embeddings: Iterator[JSONType]) -> None:
-        """Writes computed embeddings to the output file in JSON format."""
+        """Writes computed embeddings to the output file in JSON format.
+
+        Supports:
+          - List[dict] (article embeddings: one JSON line per embedding)
+          - dict (sentence/chunk schemas: one JSON line per content item)
+        """
         output_file_path = self.args.output_path
         os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+
         with open(output_file_path, "w", encoding="utf-8") as outfile:
             for embedding in embeddings:
-
                 if not embedding:
                     continue
-                log.debug("Writing embedding: %s", embedding.get("id"))
-                outfile.write(
-                    json.dumps(
-                        embedding,
-                        indent=None,
-                        separators=(",", ":"),
-                        ensure_ascii=False,
+
+                # Case 1: article-level: list of flat records
+                if isinstance(embedding, list):
+                    for rec in embedding:
+                        if not rec:
+                            continue
+                        log.debug(
+                            "Writing article embedding: %s",
+                            rec.get("id") or rec.get("ci_id"),
+                        )
+                        outfile.write(
+                            json.dumps(
+                                rec,
+                                indent=None,
+                                separators=(",", ":"),
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                        self.stats["files_created"] += 1
+
+                # Case 2: sentence/chunk-level: top-level dict matching schema
+                elif isinstance(embedding, dict):
+                    log.debug(
+                        "Writing structured embedding for CI: %s",
+                        embedding.get("ci_id") or embedding.get("id"),
                     )
-                    + "\n"
-                )
-                self.stats["files_created"] += 1
+                    outfile.write(
+                        json.dumps(
+                            embedding,
+                            # indent=None, # compact output
+                            # separators=(",", ":"), # keep spaces for readability
+                            ensure_ascii=True,  # ASCII set to TRUE for compatibility and readability
+                        )
+                        + "\n"
+                    )
+                    self.stats["files_created"] += 1
+
+                # Unexpected type
+                else:
+                    log.warning(
+                        "Unexpected embedding object of type %s, skipping.",
+                        type(embedding),
+                    )
 
     def file_exists_in_s3(self, bucket: str, key: str) -> bool:
         """Check if a file exists in an S3 bucket."""
@@ -575,7 +640,17 @@ if __name__ == "__main__":
             " %(default)s"
         ),
     )
-
+    parser.add_argument(
+        "--embedding-level",
+        choices=["text", "sentence", "chunk"],
+        default="text",
+        help=(
+            "Specify the embedding level: "
+            "'text' (default, one embedding per document), "
+            "'sentence' (one embedding per sentence), or "
+            "'chunk' (chunk text using chonkie)."
+        ),
+    )
     parser.add_argument(
         "--level",
         default="INFO",
