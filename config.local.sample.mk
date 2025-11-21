@@ -33,7 +33,7 @@ HF_FULL_MODEL_NAME := $(CREATOR_NAME)/$(HF_MODEL_NAME)
   $(call log.debug, HF_FULL_MODEL_NAME)
 
 # The embedding level option: text, sentence or chunk
-EMBEDDING_LEVEL_OPTION := sentence
+EMBEDDING_LEVEL_OPTION := chunk
 
 # The input bucket
 IN_S3_PREFIXES := lingproc/lingproc-test-v1.0.0
