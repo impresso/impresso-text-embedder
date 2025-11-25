@@ -68,6 +68,8 @@ def rebuild_ft_from_offsets(sents):
 def rebuild_sentence_from_offsets(sent):
     toks = sorted(sent.get("tok", []), key=lambda x: x["o"])
 
+    if not toks:
+        return ""
     text = []
     current_pos = toks[0]["o"]
 
