@@ -308,6 +308,13 @@ class TextEmbeddingProcessor:
         # 2) SENTENCE-LEVEL EMBEDDINGS  (embeddings-sentence.schema.json)
         #     Also used when embedding_level == "text" but the document already has sents.
         # --------------------------------------------------------------------------------
+        elif self.args.embedding_level == "sentence" and not has_sentences:
+            log.warning(
+                f"Sentence-level embedding requested but no sentences found for CI: "
+                f"{ci_id}"
+            )
+            return None
+
         elif self.args.embedding_level == "sentence" and has_sentences:
             sents = data.get("sents", [])
             if not sents:
