@@ -9,7 +9,7 @@ This repository offers tools for embedding texts in multiple languages with an e
 - **Selective Processing:** Only the necessary processing steps are executed, ensuring efficiency by not reprocessing existing outputs on S3.
 - **S3 Integration:** Integration with S3 for storing and resuming processing. The
   system ensures no overwriting of files or partial uploads due to interruptions. It is
-  also posssible to run everything locally without S3.
+  also possible to run everything locally without S3.
 - **Custom Embedding Options:** Flexible configurations via normal environment variables or make variables, including the ability to specify model versions and filter text data.
 
 ### Missing Features
