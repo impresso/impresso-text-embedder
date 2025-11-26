@@ -292,14 +292,12 @@ class TextEmbeddingProcessor:
                 "chunks": chunk_items,
             }
 
-            # Optional fields: if you have them, you can add them here.
-            # Example (uncomment and adapt when you pass them via args or data):
-            # if hasattr(self.args, "model_id") and self.args.model_id:
-            #     result_doc["model_id"] = self.args.model_id
-            # if "lingproc_path" in data:
-            #     result_doc["lingproc_path"] = data["lingproc_path"]
-            # if hasattr(self.args, "git_commit") and self.args.git_commit:
-            #     result_doc["git"] = self.args.git_commit
+            if hasattr(self.args, "model_id") and self.args.model_id:
+                result_doc["model_id"] = self.args.model_id
+            if "lingproc_path" in data:
+                result_doc["lingproc_path"] = data["lingproc_path"]
+            if hasattr(self.args, "git_commit") and self.args.git_commit:
+                result_doc["git"] = self.args.git_commit
 
             log.debug(f"Computed {len(chunk_items)} chunk embeddings for CI: {ci_id}")
             return result_doc
