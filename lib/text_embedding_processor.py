@@ -86,8 +86,8 @@ def rebuild_sentence_from_offsets(sent):
     current_pos = toks[0]["o"]
 
     for tok in toks:
-        offset = tok["o"]
-        token_text = tok["t"]
+        offset = tok.get("o", current_pos)
+        token_text = tok.get("t", "")
 
         if offset > current_pos:
             text.append(" " * (offset - current_pos))
