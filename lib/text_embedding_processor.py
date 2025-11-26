@@ -55,7 +55,7 @@ def rebuild_ft_from_offsets(sents):
         return ""
 
     # Sort tokens by offset
-    toks = sorted(toks, key=lambda x: x["o"])
+    toks = sorted(toks, key=lambda x: x.get("o", 0))
 
     text = []
     current_pos = 0
