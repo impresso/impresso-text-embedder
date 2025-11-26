@@ -34,6 +34,18 @@ JSONType = Dict[str, Any]
 
 
 def rebuild_ft_from_offsets(sents):
+    """
+    Reconstructs the full text from a list of sentence dictionaries using character offsets.
+
+    Args:
+        sents (List[Dict]): List of sentence dictionaries, each containing a "tok" key
+            with a list of token dictionaries. Each token dictionary should have:
+                - "t": token text (str)
+                - "o": character offset (int)
+
+    Returns:
+        str: The reconstructed text as a single string.
+    """
     # Flatten all tokens across sentences
     toks = []
     for sent in sents:
