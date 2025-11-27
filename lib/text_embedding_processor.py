@@ -79,6 +79,21 @@ def rebuild_ft_from_offsets(sents):
 
 
 def rebuild_sentence_from_offsets(sent):
+    """
+    Reconstructs a sentence's text from its token offsets.
+
+    Unlike `rebuild_ft_from_offsets`, this function uses the first token's offset as the starting position
+    and strips leading/trailing whitespace from the result.
+
+    Args:
+        sent (Dict): A sentence dictionary containing a "tok" key with a list of token dictionaries.
+            Each token dictionary should have:
+                - "t": token text (str)
+                - "o": character offset (int)
+
+    Returns:
+        str: The reconstructed sentence text as a single string, with leading/trailing whitespace removed.
+    """
     toks = sorted(sent.get("tok", []), key=lambda x: x["o"])
 
     if not toks:
