@@ -26,6 +26,7 @@ from sentence_transformers import SentenceTransformer
 import torch
 import boto3
 from dotenv import load_dotenv
+from chonkie import SemanticChunker
 from utils import print_log_message_summary
 
 random.seed(42)
@@ -241,8 +242,6 @@ class TextEmbeddingProcessor:
             if not text or textlen <= self.args.min_char_length:
                 self.stats["short_texts"] += 1
                 return None
-
-            from chonkie import SemanticChunker
 
             chunker = SemanticChunker(
                 embedding_model="minishlab/potion-base-8M",
