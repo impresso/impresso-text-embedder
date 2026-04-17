@@ -381,24 +381,28 @@ docker-build:
 	  -t $(DOCKER_IMAGE_BASE):$$tag \
 	  .
 
+# Build and push in one step — no local load needed, ideal for remote/Linux machines
+# Usage: make docker-build-push DOCKER_TAG=v0.1  (or prompts if not set)
+docker-build-push:
+	@read -p "Docker image tag [v0.1]: " tag; \
+	tag=$${tag:-v0.1}; \
+	echo "Building and pushing $(DOCKER_IMAGE_BASE):$$tag"; \
+	docker buildx build --platform linux/amd64 --push \
+	  --build-arg LDAP_UID=$(LDAP_UID) \
+	  --build-arg LDAP_GID=$(LDAP_GID) \
+	  --build-arg LDAP_USERNAME=$(LDAP_USERNAME) \
+	  --build-arg LDAP_GROUPNAME=$(LDAP_GROUPNAME) \
+	  -t $(DOCKER_IMAGE_BASE):$$tag \
+	  .
+
 # Login to the RCP Harbor registry with your Gaspar credentials
 docker-login:
 	docker login $(DOCKER_REGISTRY)
 
 # Push the image to the RCP registry (run make docker-login first)
-# Retries on network failure — Docker skips already-pushed layers on each retry
 # Usage: make docker-push DOCKER_TAG=v0.1
-MAX_PUSH_RETRIES ?= 10
 docker-push:
-	@attempt=1; \
-	until docker push $(DOCKER_IMAGE_BASE):$(DOCKER_TAG); do \
-	  if [ $$attempt -ge $(MAX_PUSH_RETRIES) ]; then \
-	    echo "Push failed after $(MAX_PUSH_RETRIES) attempts."; exit 1; \
-	  fi; \
-	  echo "Push failed (attempt $$attempt/$(MAX_PUSH_RETRIES)), retrying in 15s..."; \
-	  attempt=$$((attempt + 1)); \
-	  sleep 15; \
-	done
+	docker push $(DOCKER_IMAGE_BASE):$(DOCKER_TAG)
 
 # Create (or update) the Kubernetes secret for S3 credentials from .env
 # Idempotent: safe to re-run when credentials change
@@ -457,8 +461,9 @@ help:
 	@echo ""
 	@echo "Docker targets (requires .env.docker):"
 	@echo "  docker-login          # Login to registry.rcp.epfl.ch with Gaspar credentials (run once)"
-	@echo "  docker-build          # Build image for linux/amd64 with buildx, prompts for tag"
-	@echo "  docker-push           # Push image to registry.rcp.epfl.ch (usage: make docker-push DOCKER_TAG=v0.1)"
+	@echo "  docker-build          # Build image locally for linux/amd64 (Mac: requires --load)"
+	@echo "  docker-push           # Push local image to registry (usage: make docker-push DOCKER_TAG=v0.1)"
+	@echo "  docker-build-push     # Build and push in one step — ideal for Linux/remote machines"
 	@echo ""
 	@echo "Kubernetes / Run:AI targets:"
 	@echo "  k8s-create-secret     # Create/update k8s secret for S3 credentials from .env"
@@ -471,7 +476,7 @@ help:
 .DEFAULT_GOAL := help
 
 
-.PHONY: all help setup sync sync-input sync-output sync-input-rebuilt sync-output-processed-data newspaper each resync clean-sync newspaper-list-target test-download docker-login docker-build docker-push k8s-create-secret runai-submit
+.PHONY: all help setup sync sync-input sync-output sync-input-rebuilt sync-output-processed-data newspaper each resync clean-sync newspaper-list-target test-download docker-login docker-build docker-build-push docker-push k8s-create-secret runai-submit
 
 
 ###
