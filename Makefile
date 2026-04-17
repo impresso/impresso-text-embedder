@@ -23,8 +23,15 @@ export SHELLOPTS:=errexit:pipefail
 ###
 # SETTINGS FOR THE BUILD PROCESS
 
-# Load local config if it exists (ignore silently if it does not exists)
+# Load local config if it exists (ignore silently if it does not exist)
 -include config.local.mk
+
+# Load Docker build args if it exists (ignore silently if it does not exist)
+# Copy .env.docker.example to .env.docker and fill in your values
+-include .env.docker
+
+# Load S3 credentials for k8s secret target (ignore silently if it does not exist)
+-include .env
 
 # Set the logging level: DEBUG, INFO, WARNING, ERROR
 LOGGING_LEVEL ?= INFO
@@ -36,6 +43,10 @@ include lib/log.mk
 # Set the number of parallel embedding jobs to run
 MAKE_PARALLEL_OPTION ?= --jobs 2
   $(call log.debug, MAKE_PARALLEL_OPTION)
+
+# Python interpreter — python3 on Mac/Linux, override if needed
+PYTHON ?= python3
+  $(call log.debug, PYTHON)
 
 
 ###
@@ -62,7 +73,7 @@ NEWSPAPERS_TO_PROCESS_FILE ?= $(BUILD_DIR)/newspapers.txt
 # (default or order them randomly? By recency, larger newer years are processed first,
 # avoiding waiting for the most recent years to be processed). By random order,
 # recomputations by different machines working on the dataset are less likely to happen.
-NEWSPAPER_YEAR_SORTING ?= shuf
+NEWSPAPER_YEAR_SORTING ?= sort -R
 # for the default order, comment the line above and uncomment the line below
 #NEWSPAPER_YEAR_SORTING ?= cat
   $(call log.debug, NEWSPAPER_YEAR_SORTING)
@@ -73,7 +84,7 @@ newspaper-list-target: $(NEWSPAPERS_TO_PROCESS_FILE)
 # Rule to generate the file containing the newspapers to process
 # we shuffle the newspapers to avoid recomputations by different machines working on the dataset
 $(NEWSPAPERS_TO_PROCESS_FILE):
-	python -c \
+	$(PYTHON) -c \
 	"import lib.s3_to_local_stamps as m; import random; \
 	s3 = m.get_s3_resource(); \
 	bucket = s3.Bucket('$(IN_S3_BUCKET_REBUILT)'); \
@@ -82,6 +93,27 @@ $(NEWSPAPERS_TO_PROCESS_FILE):
 	random.shuffle(l); \
     print(*l)" \
 	> $@
+
+###
+# DOCKER SETTINGS
+
+DOCKER_REGISTRY ?= registry.rcp.epfl.ch
+# Shared project namespace on RCP (personal: $(shell echo $(LDAP_GROUPNAME) | cut -d'-' -f1 | tr '[:upper:]' '[:lower:]')-$(shell echo $(LDAP_USERNAME) | tr '[:upper:]' '[:lower:]'))
+DOCKER_PROJECT ?= impresso
+DOCKER_IMAGE ?= impresso-text-embedder
+DOCKER_TAG ?= v0.1
+DOCKER_IMAGE_BASE = $(DOCKER_REGISTRY)/$(DOCKER_PROJECT)/$(DOCKER_IMAGE)
+  $(call log.debug, DOCKER_IMAGE_BASE)
+
+###
+# KUBERNETES / RUN:AI SETTINGS
+
+K8S_SECRET_NAME ?= s3-credentials
+RUNAI_PROJECT ?= impresso
+RCP_PVC ?= dhlab-scratch
+RCP_SCRATCH_PATH ?= /rcp-scratch
+RUNAI_NODE_POOL ?= default
+RUNAI_JOB_NAME ?= embed-$(shell echo $(PROVIDER) | tr '[:upper:]' '[:lower:]')
 
 ###
 # HUGGINGFACE MODEL SETTINGS
@@ -107,6 +139,9 @@ HF_FULL_MODEL_NAME ?= $(CREATOR_NAME)/$(HF_MODEL_NAME)
 # Make variables for s3 paths are defined as OUT_S3_ or IN_S3_
 # If more than one input is needed, the variable names are IN_1_S3_ or OUT_2_S3_
 # Make variables for local paths are defined as OUT_LOCAL_ or IN_LOCAL_
+
+# Default year for test-download target
+SAMPLE_YEAR ?= 1927
 
 # The input bucket
 IN_S3_BUCKET_REBUILT ?= 22-rebuilt-final
@@ -208,7 +243,7 @@ setup:
 setup-hf-model:
 	# 
 	# DOWNLOADING THE HUGGINGFACE MODEL
-	python3 -c "from sentence_transformers import SentenceTransformer as st; \
+	$(PYTHON) -c "from sentence_transformers import SentenceTransformer as st; \
 	m = st('$(HF_FULL_MODEL_NAME)', revision='$(HF_MODEL_VERSION)',trust_remote_code=True); \
 	len(m.encode('This is a test!')) or exit(1)"
 	# OK: DOWNLOADING THE HUGGINGFACE MODEL DONE
@@ -217,7 +252,7 @@ setup-hf-model:
 check-python-installation:
 	#
 	# TEST YOUR PYTHON ENVIRONMENT...
-	python3 -c "import sentence_transformers as st; import smart_open;" || \
+	$(PYTHON) -c "import sentence_transformers as st; import smart_open;" || \
 	{ echo "Double check whether the required python packages are installed! or you running in the correct python environment!" ; exit 1; }
 	# OK: YOUR PYTHON ENVIRONMENT IS FINE!
 
@@ -268,7 +303,7 @@ clean-sync:
 # Rule to sync the input data from the S3 bucket to the local directory
 $(IN_LOCAL_PATH_REBUILT).last_synced:
 	mkdir -p $(@D) && \
-	python lib/s3_to_local_stamps.py \
+	$(PYTHON) lib/s3_to_local_stamps.py \
 	   $(IN_S3_PATH_REBUILT) \
 	   --local-dir $(BUILD_DIR) \
 	   --stamp-extension .stamp \
@@ -278,7 +313,7 @@ $(IN_LOCAL_PATH_REBUILT).last_synced:
 # Rule to sync the output data from the S3 bucket to the local directory
 $(OUT_LOCAL_PATH_PROCESSED_DATA).last_synced:
 	mkdir -p $(@D) && \
-	python lib/s3_to_local_stamps.py \
+	$(PYTHON) lib/s3_to_local_stamps.py \
 	   $(OUT_S3_PATH_PROCESSED_DATA) \
 	   --local-dir $(BUILD_DIR) \
 	   --stamp-extension '' \
@@ -309,7 +344,7 @@ textembedding-target: sync $(local-textembedding-files)
 # Rule to process the text embeddings for a single newspaper
 $(OUT_LOCAL_PATH_PROCESSED_DATA)/%.jsonl.bz2: $(IN_LOCAL_PATH_REBUILT)/%.jsonl.bz2.stamp
 	mkdir -p $(@D)
-	python lib/text_embedding_processor.py \
+	$(PYTHON) lib/text_embedding_processor.py \
 	  --min-char-length $(EMBEDDING_MIN_CHAR_LENGTH) \
 	  $(EMBEDDING_INCLUDE_TEXT_OPTION) \
 	  --model-name $(HF_FULL_MODEL_NAME) \
@@ -328,6 +363,83 @@ clean-textembeddings:
 	rm -vf $(OUT_LOCAL_PATH_PROCESSED_DATA)/*.jsonl.bz2 || true
 
 
+###
+# DOCKER TARGETS
+
+# Build the Docker image locally using LDAP args from .env.docker
+# Uses buildx for linux/amd64 cross-compilation (required on Mac)
+# Prompts for a version tag (e.g. v0.1)
+docker-build:
+	@read -p "Docker image tag [v0.1]: " tag; \
+	tag=$${tag:-v0.1}; \
+	echo "Building $(DOCKER_IMAGE_BASE):$$tag"; \
+	docker buildx build --platform linux/amd64 --load \
+	  --build-arg LDAP_UID=$(LDAP_UID) \
+	  --build-arg LDAP_GID=$(LDAP_GID) \
+	  --build-arg LDAP_USERNAME=$(LDAP_USERNAME) \
+	  --build-arg LDAP_GROUPNAME=$(LDAP_GROUPNAME) \
+	  -t $(DOCKER_IMAGE_BASE):$$tag \
+	  .
+
+# Login to the RCP Harbor registry with your Gaspar credentials
+docker-login:
+	docker login $(DOCKER_REGISTRY)
+
+# Push the image to the RCP registry (run make docker-login first)
+# Retries on network failure — Docker skips already-pushed layers on each retry
+# Usage: make docker-push DOCKER_TAG=v0.1
+MAX_PUSH_RETRIES ?= 10
+docker-push:
+	@attempt=1; \
+	until docker push $(DOCKER_IMAGE_BASE):$(DOCKER_TAG); do \
+	  if [ $$attempt -ge $(MAX_PUSH_RETRIES) ]; then \
+	    echo "Push failed after $(MAX_PUSH_RETRIES) attempts."; exit 1; \
+	  fi; \
+	  echo "Push failed (attempt $$attempt/$(MAX_PUSH_RETRIES)), retrying in 15s..."; \
+	  attempt=$$((attempt + 1)); \
+	  sleep 15; \
+	done
+
+# Create (or update) the Kubernetes secret for S3 credentials from .env
+# Idempotent: safe to re-run when credentials change
+k8s-create-secret:
+	kubectl create secret generic $(K8S_SECRET_NAME) \
+	  --from-literal=SE_ACCESS_KEY=$(SE_ACCESS_KEY) \
+	  --from-literal=SE_SECRET_KEY=$(SE_SECRET_KEY) \
+	  --from-literal=SE_HOST_URL=$(SE_HOST_URL) \
+	  --dry-run=client -o yaml | kubectl apply -f -
+
+# Submit a Run:AI job for a single provider
+# Usage: make runai-submit PROVIDER=BNL DOCKER_TAG=v0.1
+runai-submit:
+	runai submit \
+	  --name $(RUNAI_JOB_NAME) \
+	  --project $(RUNAI_PROJECT) \
+	  --image $(DOCKER_IMAGE_BASE):$(DOCKER_TAG) \
+	  --gpu 1 \
+	  --existing-pvc claimname=$(RCP_PVC),path=$(RCP_SCRATCH_PATH) \
+	  --existing-secret secretName=$(K8S_SECRET_NAME) \
+	  --node-pool $(RUNAI_NODE_POOL) \
+	  -- $(PROVIDER) 0
+
+
+
+# Download one sample file from S3 into build.d and decompress it
+SAMPLE_DEST := $(BUILD_DIR)/sample/$(NEWSPAPER)-$(SAMPLE_YEAR).jsonl
+
+test-download:
+	mkdir -p $(BUILD_DIR)/sample
+	$(PYTHON) -c "\
+import sys; sys.path.insert(0, 'lib'); \
+from s3_to_local_stamps import get_s3_resource; \
+s3 = get_s3_resource(); \
+key = '$(NEWSPAPER)/$(NEWSPAPER)-$(SAMPLE_YEAR).jsonl.bz2'; \
+dest = '$(SAMPLE_DEST).bz2'; \
+print(f'Downloading s3://$(IN_S3_BUCKET_REBUILT)/{key} -> {dest}'); \
+s3.Bucket('$(IN_S3_BUCKET_REBUILT)').download_file(key, dest); \
+print('Downloaded.')"
+	bzip2 -dk $(SAMPLE_DEST).bz2
+	@echo "Sample ready: $(SAMPLE_DEST)"
 
 # Provide a help message for the user
 help:
@@ -342,13 +454,24 @@ help:
 	@echo "  clean-sync # Remove the local synchronization file stamp and redoes everything, ensuring a full sync with the remote server."
 	@echo "  each      # Process the text embeddings for each newspaper found in the file $(NEWSPAPERS_TO_PROCESS_FILE)"
 	@echo "  help      # Show this help message"
+	@echo ""
+	@echo "Docker targets (requires .env.docker):"
+	@echo "  docker-login          # Login to registry.rcp.epfl.ch with Gaspar credentials (run once)"
+	@echo "  docker-build          # Build image for linux/amd64 with buildx, prompts for tag"
+	@echo "  docker-push           # Push image to registry.rcp.epfl.ch (usage: make docker-push DOCKER_TAG=v0.1)"
+	@echo ""
+	@echo "Kubernetes / Run:AI targets:"
+	@echo "  k8s-create-secret     # Create/update k8s secret for S3 credentials from .env"
+	@echo "  runai-submit          # Submit a Run:AI job (usage: make runai-submit PROVIDER=BNL DOCKER_TAG=v0.1)"
+	@echo ""
 	@echo "# cp config.local.sample.mk config.local.mk and adapt the settings to your needs"
+	@echo "# cp .env.docker.example .env.docker and fill in your EPFL LDAP values"
 
 # Default target when no target is specified on the command line
 .DEFAULT_GOAL := help
 
 
-.PHONY: all help setup sync sync-input sync-output sync-input-rebuilt sync-output-processed-data newspaper each resync clean-sync newspaper-list-target
+.PHONY: all help setup sync sync-input sync-output sync-input-rebuilt sync-output-processed-data newspaper each resync clean-sync newspaper-list-target test-download docker-login docker-build docker-push k8s-create-secret runai-submit
 
 
 ###

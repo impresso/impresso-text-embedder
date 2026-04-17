@@ -1,6 +1,9 @@
 *.d/*
 .env
+.env.docker
 .DS_Store
 .idea
 lib/__pycache__/
 config.local.mk
+IMPRESSO_DATA_FORMAT.md
+TEI_MIGRATION.md
