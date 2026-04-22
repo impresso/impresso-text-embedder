@@ -1,0 +1,110 @@
+"""Model loading and encoding wrapper.
+
+A thin layer over ``sentence_transformers.SentenceTransformer`` that:
+  * loads with ``trust_remote_code=True`` (required by ``gte-multilingual-base``);
+  * picks CUDA when available;
+  * wraps ``encode(...)`` in a bf16 autocast on CUDA (A100 tensor cores);
+  * leaves batch size to the caller.
+
+See ``.progress/gpu-throughput/notes.md`` for the rationale.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+import torch
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+
+log = logging.getLogger(__name__)
+
+DEFAULT_MODEL_NAME = "Alibaba-NLP/gte-multilingual-base"
+
+
+def select_device() -> str:
+    """Return ``"cuda"`` if a CUDA device is visible, else ``"cpu"``."""
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def load_model(
+    name: str = DEFAULT_MODEL_NAME,
+    revision: str | None = None,
+    device: str | None = None,
+) -> SentenceTransformer:
+    """Load a SentenceTransformer model pinned to ``revision`` (if given).
+
+    On CUDA, the model is left in fp32 and bf16 is applied at encode time via
+    ``torch.autocast`` (see :func:`encode_texts`). That keeps LayerNorm in fp32,
+    which is safer than casting the whole module.
+    """
+    from sentence_transformers import SentenceTransformer
+
+    resolved_device = device or select_device()
+    log.info("Loading SentenceTransformer %s@%s on %s", name, revision or "default", resolved_device)
+    model = SentenceTransformer(
+        model_name_or_path=name,
+        trust_remote_code=True,
+        revision=revision,
+        device=resolved_device,
+    )
+    model.eval()
+    log.info("Model loaded (device=%s)", resolved_device)
+    return model
+
+
+@contextlib.contextmanager
+def _cuda_bf16_autocast(device: str) -> Iterator[None]:
+    """Enable bf16 autocast on CUDA; no-op elsewhere."""
+    if device == "cuda":
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            yield
+    else:
+        yield
+
+
+def encode_texts(
+    model: SentenceTransformer,
+    texts: list[str],
+    batch_size: int,
+    normalize: bool = True,
+    show_progress_bar: bool = False,
+) -> np.ndarray:
+    """Encode ``texts`` into a numpy array of shape ``[len(texts), D]``.
+
+    On CUDA, runs under bf16 autocast + ``torch.inference_mode()``. On CPU, just
+    inference_mode. Caller picks ``batch_size``.
+    """
+    if not texts:
+        return np.zeros((0, 0), dtype=np.float32)
+
+    device = _current_device(model)
+    with torch.inference_mode(), _cuda_bf16_autocast(device):
+        out = model.encode(
+            texts,
+            batch_size=batch_size,
+            show_progress_bar=show_progress_bar,
+            convert_to_numpy=True,
+            normalize_embeddings=normalize,
+        )
+    return _as_float32(out)
+
+
+def _current_device(model: SentenceTransformer) -> str:
+    try:
+        first_param_device = next(model.parameters()).device
+    except StopIteration:
+        return "cpu"
+    return "cuda" if first_param_device.type == "cuda" else first_param_device.type
+
+
+def _as_float32(out: Any) -> np.ndarray:
+    arr = np.asarray(out)
+    if arr.dtype != np.float32:
+        arr = arr.astype(np.float32, copy=False)
+    return arr

@@ -28,11 +28,16 @@ A single Python package, `impresso-text-embedder`, that:
 
 ## Target hardware (for now)
 
-**A100 only.** Single GPU. All A100-appropriate optimizations are welcome if they actually speed things up:
-- `bfloat16` autocast (A100 has native bf16 tensor cores)
-- `flash-attn` v2 if the model wrapper supports it (`gte-multilingual-base` uses `new-impl` modeling code that accepts `attn_implementation`)
-- `torch.compile` only if it measurably helps and doesn't break the ST API
-- Avoid fp16 unless bf16 is shown to underperform — the point of A100 is bf16
+**A100 only.** Single GPU. Applied today (`model.py`):
+- `bfloat16` via `torch.autocast(device_type="cuda", dtype=torch.bfloat16)` around `model.encode`. Model weights stay fp32 so LayerNorm stays stable. No `.to(bfloat16)` on the module.
+- `torch.inference_mode()` around encoding.
+- `trust_remote_code=True` (required by `gte-multilingual-base`).
+
+Deferred / opt-in (decide when we can measure on real A100 — see `.progress/gpu-throughput/notes.md`):
+- **xformers + unpadding** — the documented acceleration path for this model family. To be added as an `accel` extra in `pyproject.toml` with the matching `model_kwargs` passthrough.
+- `flash-attn` v2 — **not** documented as supported by `gte-multilingual-base`. Don't wire unless xformers is insufficient.
+- `torch.compile` — benchmark before enabling; ST's encode path may not trace cleanly.
+- Avoid fp16 unless bf16 is shown to underperform — the point of A100 is bf16.
 
 Multi-GPU, older TITAN, or newer Hopper/Blackwell variants are **explicitly out of scope** right now. The `pyproject.toml` should be structured so variants can be added later (e.g. as optional dependency groups or extras), but do not over-engineer that now.
 
