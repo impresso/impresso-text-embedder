@@ -11,7 +11,7 @@ Living step list. Statuses: `todo` / `wip` / `done` / `deferred`. Slug names are
 | 5 | chunking | done | `.progress/chunking/` |
 | 6 | create-cli | done | `.progress/create-cli/` |
 | 7 | validate-cli | done | `.progress/validation-metric/` |
-| 8 | e2e-docs | wip | no |
+| 8 | e2e-docs | done | no |
 
 ## Step details
 

@@ -187,12 +187,13 @@ Import name uses underscores: `impresso_text_embedder`. Distribution name uses h
 
 ---
 
-## Commands (once pyproject exists)
+## Commands
 
 ```bash
-uv sync                                   # install
-uv run impresso-embed-create --provider SNL --embedding-level text --batch-size 128
-uv run impresso-embed-validate s3://.../EXP-1912.jsonl.bz2 --target s3://.../golden/EXP-1912.jsonl.bz2 --tol 1e-4
+uv sync --extra dev
+uv run impresso-embed-create --provider SNL --input-bucket <in> --output-bucket <out> --embedding-level text --batch-size 64
+uv run impresso-embed-validate s3://.../EXP-1912.jsonl.bz2                                   # structural
+uv run impresso-embed-validate s3://.../EXP-1912.jsonl.bz2 --target s3://.../golden/...      # comparison (tol=1e-4)
 uv run pytest
 uv run ruff check .
 ```
@@ -209,12 +210,16 @@ uv run ruff check .
 
 ---
 
-## Things to decide before / while implementing
+## Decisions recorded
 
-Leave these as open questions; don't paper over them:
+- **Validation metric:** cosine distance on L2-normalized vectors; default tolerance `1e-4`. Rationale in `.progress/validation-metric/notes.md`.
+- **Model slug:** strips the `Alibaba-NLP/` vendor prefix (`Alibaba-NLP/gte-multilingual-base → gte-multilingual-base`). Revision is **not** appended to the slug; different revisions of the same model go to the same output path. Revisit only if a side-by-side revision comparison is needed.
+- **Output JSON encoding:** compact single-line records via `json.dumps(obj, ensure_ascii=False)` (default separators), one record per line, then bz2-compressed at the file level. Embeddings rounded to 5 decimals on write.
+- **Streaming inputs:** hand-rolled (see `.progress/io-layer/notes.md`); `impresso_essentials.io.s3.read_jsonlines` is intentionally unused on the hot path.
+- **A100 bf16 strategy:** autocast around `encode()`, model weights stay fp32. Recorded in `.progress/gpu-throughput/notes.md`.
 
-- Default `--batch-size` per embedding level on A100 (measure, don't guess).
-- Validation metric + default tolerance.
-- Whether to include the model revision hash in `<model-slug>` or keep it separate.
-- Whether to emit an impresso-essentials data manifest alongside outputs.
-- Exact output JSON encoding choice (compact vs. readable; old code is inconsistent between levels — pick one, document here).
+## Still open — needs real A100 time
+
+- **Default `--batch-size` per embedding level.** Current placeholders in `cli/create.py`: CLI default 64, effective range 64–256+. Measure once, pick defaults, document here.
+- **xformers + unpadding opt-in.** Documented as the right accelerator for this model family; not wired yet. Needs an `accel` extra and `model_kwargs` passthrough, gated on measurement.
+- **Data manifest (impresso-essentials `versioning`) emission alongside outputs.** Useful but not required for any current consumer — add when one needs it.
