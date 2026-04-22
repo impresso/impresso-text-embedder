@@ -200,13 +200,43 @@ uv run ruff check .
 
 ---
 
+## Containerised execution (EPFL RCP / Run:AI)
+
+Production runs happen in a container submitted to Run:AI on EPFL RCP. The
+`Dockerfile` builds on `nvcr.io/nvidia/pytorch:25.03-py3` (NGC torch is
+left untouched — our package's `torch>=2.2` is already satisfied), creates
+an LDAP-matched user (so PVC writes land with the right ownership), and
+sets `ENTRYPOINT ["impresso-embed-create"]`. No bash wrapper.
+
+A slim `Makefile` orchestrates the container/cluster side only:
+
+```bash
+cp .env.docker.example .env.docker      # fill LDAP UID/GID, registry, RUNAI_PROJECT
+make docker-login                       # once
+make docker-build-push                  # build linux/amd64 + push to Harbor
+make k8s-create-secrets                 # S3 creds + Harbor pull secret (idempotent)
+make runai-submit PROVIDER=BNL \
+     INPUT_BUCKET=22-rebuilt-final \
+     OUTPUT_BUCKET=42-processed-data-final \
+     EMBED_EXTRA_ARGS="--embedding-level text --batch-size 64"
+make runai-interactive && make runai-bash    # debug pod (sleep infinity entrypoint)
+make runai-delete-debug                       # cleanup
+```
+
+Design rationale, gotchas, and the secret-name conventions live in
+`.progress/docker-runai/notes.md`. The Makefile contains **no data
+processing logic** — it is only `docker buildx` / `kubectl` / `runai`
+glue, with `make help` listing every target.
+
+---
+
 ## Non-goals (explicit)
 
 - Multi-GPU, multi-node, DDP.
 - Non-A100 GPU variants (deferred).
 - Incremental/partial-file recovery mid-shard. A file either completes or is redone.
 - Local-only workflows beyond tests — production flow is S3 in, S3 out.
-- A new Makefile or stamp-based orchestration. The `main`-branch Make layer is being deliberately replaced by a Python CLI.
+- A new Make-driven **data pipeline**. The `main`-branch stamp/sync orchestration is being replaced by the Python CLI. (A small `Makefile` exists but it only wraps `docker buildx`, `kubectl`, and `runai submit` — no data flows through it. See "Containerised execution" below.)
 
 ---
 
@@ -217,6 +247,7 @@ uv run ruff check .
 - **Output JSON encoding:** compact single-line records via `json.dumps(obj, ensure_ascii=False)` (default separators), one record per line, then bz2-compressed at the file level. Embeddings rounded to 5 decimals on write.
 - **Streaming inputs:** hand-rolled (see `.progress/io-layer/notes.md`); `impresso_essentials.io.s3.read_jsonlines` is intentionally unused on the hot path.
 - **A100 bf16 strategy:** autocast around `encode()`, model weights stay fp32. Recorded in `.progress/gpu-throughput/notes.md`.
+- **Re-embed on input change:** compare S3 `LastModified` of input vs existing output at skip-decision time. Input timestamps come from `list_objects_v2` (no extra HEAD), output via `head_last_modified`. `--force` overrides unconditionally. Known gap: byte-identical re-uploads still trigger a re-embed, and this does not replace the deferred `impresso-essentials.versioning` manifest. Rationale in `.progress/reembed-on-change/notes.md`.
 
 ## Still open — needs real A100 time
 

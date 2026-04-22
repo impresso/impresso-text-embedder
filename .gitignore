@@ -1,6 +1,8 @@
 # Secrets / local config
 .env
 .env.local
+.env.docker
+config.local.mk
 
 # OS / editor
 .DS_Store

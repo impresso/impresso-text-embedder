@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import bz2
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +23,10 @@ from impresso_text_embedder import model as model_mod
 from impresso_text_embedder import pipeline as pl
 from impresso_text_embedder.cli import create as create_cli
 from impresso_text_embedder.cli import validate as validate_cli
+
+
+def _mtime(path: Path) -> datetime:
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
 
 def _record(ci_id: str, body: str) -> dict:
@@ -65,13 +71,14 @@ def fake_world(tmp_path, monkeypatch):
                     yield line
 
     def fake_list_input_keys(bucket, provider, input_prefix="", **_):
-        # Walk the fake input root and return InputKey objects.
+        # Walk the fake input root and return InputKey objects with real mtimes.
         provider_dir = input_root / provider
         if not provider_dir.exists():
             return
         for path in sorted(provider_dir.rglob("*.jsonl.bz2")):
             rel = path.relative_to(input_root).as_posix()
-            yield s3io.parse_input_key(rel)
+            parsed = s3io.parse_input_key(rel)
+            yield parsed._replace(last_modified=_mtime(path))
 
     uploaded: dict[str, bytes] = {}
 
@@ -82,13 +89,16 @@ def fake_world(tmp_path, monkeypatch):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(uploaded[key])
 
-    def fake_object_exists(bucket, key):
-        return (output_root / key).exists()
+    def fake_head_last_modified(bucket, key):
+        dest = output_root / key
+        if not dest.exists():
+            return None
+        return _mtime(dest)
 
     monkeypatch.setattr(s3io, "iter_jsonl_bz2", fake_iter_jsonl_bz2)
     monkeypatch.setattr(s3io, "list_input_keys", fake_list_input_keys)
     monkeypatch.setattr(s3io, "upload_local_file", fake_upload)
-    monkeypatch.setattr(s3io, "object_exists", fake_object_exists)
+    monkeypatch.setattr(s3io, "head_last_modified", fake_head_last_modified)
     # pipeline.iter_input_lines goes through s3io.iter_jsonl_bz2 already.
 
     # Deterministic fake encoder: derive embedding from text length modulo.
@@ -205,6 +215,51 @@ def test_force_flag_reprocesses(fake_world):
     assert create_cli.main([*argv, "--force"]) == 0
     # Same set of keys, count unchanged (we overwrite in fake).
     assert len(fake_world["uploaded"]) == seen_before
+
+
+def test_reembeds_when_input_is_newer(fake_world):
+    argv = [
+        "--provider",
+        "SNL",
+        "--input-bucket",
+        "in-bkt",
+        "--output-bucket",
+        "out-bkt",
+        "--embedding-level",
+        "text",
+        "--batch-size",
+        "4",
+        "--min-char-length",
+        "10",
+    ]
+    assert create_cli.main(argv) == 0
+    first_run_keys = set(fake_world["uploaded"])
+    assert first_run_keys  # sanity
+
+    # Touch one input file so its mtime is strictly newer than the output's.
+    input_root: Path = fake_world["input_root"]
+    output_root: Path = fake_world["output_root"]
+    target_input = input_root / "SNL/EXP/EXP-1910.jsonl.bz2"
+    target_output = (
+        output_root / "embeddings/docs/gte-multilingual-base/SNL/EXP/EXP-1910.jsonl.bz2"
+    )
+    new_mtime = target_output.stat().st_mtime + 10
+    os.utime(target_input, (new_mtime, new_mtime))
+
+    reuploaded: list[str] = []
+    orig_upload = s3io.upload_local_file
+
+    def spy_upload(local_path, bucket, key):
+        reuploaded.append(key)
+        orig_upload(local_path, bucket, key)
+
+    with patch.object(s3io, "upload_local_file", spy_upload):
+        assert create_cli.main(argv) == 0
+
+    # Only the touched file should have been re-embedded.
+    assert reuploaded == [
+        "embeddings/docs/gte-multilingual-base/SNL/EXP/EXP-1910.jsonl.bz2"
+    ]
 
 
 def test_dry_run_does_no_work(fake_world):

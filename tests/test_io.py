@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import bz2
 import io as _io
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -79,11 +80,9 @@ class TestParseInputKey:
 
 
 class TestListInputKeys:
-    def _make_s3_client(self, keys):
+    def _make_s3_client(self, contents):
         paginator = MagicMock()
-        paginator.paginate.return_value = [
-            {"Contents": [{"Key": k} for k in keys]},
-        ]
+        paginator.paginate.return_value = [{"Contents": contents}]
         client = MagicMock()
         client.get_paginator.return_value = paginator
         return client, paginator
@@ -91,10 +90,10 @@ class TestListInputKeys:
     def test_filters_and_parses(self):
         client, paginator = self._make_s3_client(
             [
-                "p/SNL/EXP/EXP-1910.jsonl.bz2",
-                "p/SNL/EXP/EXP-1911.jsonl.bz2",
-                "p/SNL/EXP/README.txt",  # wrong suffix → skipped
-                "p/SNL/GDL/GDL-1911.jsonl.bz2",
+                {"Key": "p/SNL/EXP/EXP-1910.jsonl.bz2"},
+                {"Key": "p/SNL/EXP/EXP-1911.jsonl.bz2"},
+                {"Key": "p/SNL/EXP/README.txt"},  # wrong suffix → skipped
+                {"Key": "p/SNL/GDL/GDL-1911.jsonl.bz2"},
             ]
         )
         with patch.object(io, "get_s3_client", return_value=client):
@@ -106,6 +105,15 @@ class TestListInputKeys:
         paginator.paginate.assert_called_once_with(Bucket="bucket", Prefix="p/SNL/")
         assert [(k.alias, k.year) for k in keys] == [("EXP", 1911)]
 
+    def test_populates_last_modified(self):
+        when = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        client, _ = self._make_s3_client(
+            [{"Key": "SNL/EXP/EXP-1912.jsonl.bz2", "LastModified": when}]
+        )
+        with patch.object(io, "get_s3_client", return_value=client):
+            (only,) = list(io.list_input_keys("bucket", "SNL"))
+        assert only.last_modified == when
+
     def test_handles_empty_page(self):
         client = MagicMock()
         client.get_paginator.return_value.paginate.return_value = [{}]
@@ -113,29 +121,35 @@ class TestListInputKeys:
             assert list(io.list_input_keys("b", "P")) == []
 
 
-class TestObjectExists:
+class TestHeadLastModified:
+    def _client_with_response(self, resp):
+        client = MagicMock()
+        client.head_object.return_value = resp
+        return client
+
     def _client_that_raises(self, code):
         err = ClientError({"Error": {"Code": code}}, "HeadObject")
         client = MagicMock()
         client.head_object.side_effect = err
         return client
 
-    def test_true_when_head_succeeds(self):
-        client = MagicMock()
+    def test_returns_last_modified_on_success(self):
+        when = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+        client = self._client_with_response({"LastModified": when})
         with patch.object(io, "get_s3_client", return_value=client):
-            assert io.object_exists("b", "k") is True
+            assert io.head_last_modified("b", "k") == when
 
     @pytest.mark.parametrize("code", ["404", "NoSuchKey", "NotFound"])
-    def test_false_on_missing_codes(self, code):
+    def test_returns_none_on_missing_codes(self, code):
         with patch.object(io, "get_s3_client", return_value=self._client_that_raises(code)):
-            assert io.object_exists("b", "k") is False
+            assert io.head_last_modified("b", "k") is None
 
     def test_reraises_other_errors(self):
         with patch.object(
             io, "get_s3_client", return_value=self._client_that_raises("AccessDenied")
         ):
             with pytest.raises(ClientError):
-                io.object_exists("b", "k")
+                io.head_last_modified("b", "k")
 
 
 class TestIterJsonlBz2:

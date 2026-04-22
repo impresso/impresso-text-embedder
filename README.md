@@ -69,6 +69,24 @@ uv run pytest             # unit + end-to-end tests
 uv run ruff check .
 ```
 
+## Containerised runs (EPFL RCP / Run:AI)
+
+A `Dockerfile` and `Makefile` ship with the package for production runs on
+the EPFL RCP cluster.
+
+```bash
+cp .env.docker.example .env.docker     # LDAP UID/GID, registry, Run:AI project
+make docker-login
+make docker-build-push                 # build linux/amd64 → Harbor
+make k8s-create-secrets                # S3 + Harbor pull secret
+make runai-submit PROVIDER=BNL \
+     INPUT_BUCKET=22-rebuilt-final \
+     OUTPUT_BUCKET=42-processed-data-final
+```
+
+`make help` lists every target. Design notes:
+[`.progress/docker-runai/notes.md`](./.progress/docker-runai/notes.md).
+
 See `.progress/<slug>/notes.md` for design decisions on individual subsystems
 (I/O streaming, GPU throughput, chunking, CLI, validation metric).
 

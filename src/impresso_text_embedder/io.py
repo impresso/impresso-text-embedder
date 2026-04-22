@@ -11,6 +11,7 @@ import bz2
 import logging
 import re
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -32,6 +33,7 @@ class InputKey(NamedTuple):
     alias: str
     year: int
     key: str
+    last_modified: datetime | None = None
 
 
 def parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -116,20 +118,20 @@ def list_input_keys(
                 continue
             if year_max is not None and parsed.year > year_max:
                 continue
-            yield parsed
+            yield parsed._replace(last_modified=obj.get("LastModified"))
 
 
-def object_exists(bucket: str, key: str) -> bool:
-    """Return True iff the S3 object exists. 404 → False; other errors re-raised."""
+def head_last_modified(bucket: str, key: str) -> datetime | None:
+    """Return the object's ``LastModified`` (tz-aware UTC), or None if it doesn't exist."""
     s3 = get_s3_client()
     try:
-        s3.head_object(Bucket=bucket, Key=key)
+        resp = s3.head_object(Bucket=bucket, Key=key)
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "")
         if code in {"404", "NoSuchKey", "NotFound"}:
-            return False
+            return None
         raise
-    return True
+    return resp.get("LastModified")
 
 
 def iter_jsonl_bz2(bucket: str, key: str) -> Iterator[str]:

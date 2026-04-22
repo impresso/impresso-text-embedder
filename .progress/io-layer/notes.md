@@ -53,9 +53,9 @@ Helpers:
 
 Filename discipline: `<alias>-<year>.jsonl.bz2`. If real inputs ever violate this, parsing fails loudly (assertion) rather than producing a mangled output path.
 
-## Existence check
+## Output freshness check
 
-`object_exists(bucket, key)` uses the boto3 client's `head_object` and treats `404` as False, any other `ClientError` as a real error. This backs the idempotent skip-if-output-exists behaviour.
+`head_last_modified(bucket, key)` uses the boto3 client's `head_object` and returns the object's `LastModified` timestamp (tz-aware UTC), or `None` on `404`/`NoSuchKey`/`NotFound`. Any other `ClientError` is re-raised. Used by the pipeline to compare output vs input timestamps — see `.progress/reembed-on-change/notes.md`.
 
 ## Not in scope for step 2
 

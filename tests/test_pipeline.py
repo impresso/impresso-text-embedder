@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import bz2
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -11,6 +12,9 @@ import pytest
 from impresso_text_embedder import embed as em
 from impresso_text_embedder import io as s3io
 from impresso_text_embedder import pipeline as pl
+
+_T0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+_T_LATER = _T0 + timedelta(hours=1)
 
 
 def _cfg(force=False, level="text"):
@@ -81,7 +85,7 @@ def test_process_file_writes_and_uploads(monkeypatch, fake_input_records, tmp_pa
         uploaded["bytes"] = Path(local_path).read_bytes()
 
     monkeypatch.setattr(s3io, "upload_local_file", fake_upload)
-    monkeypatch.setattr(s3io, "object_exists", lambda b, k: False)
+    monkeypatch.setattr(s3io, "head_last_modified", lambda b, k: None)
     monkeypatch.setattr(
         em,
         "encode_texts",
@@ -104,9 +108,9 @@ def test_process_file_writes_and_uploads(monkeypatch, fake_input_records, tmp_pa
         assert r["embedding"] == [0.1, 0.2]
 
 
-def test_process_file_skips_when_output_exists(monkeypatch):
-    monkeypatch.setattr(s3io, "object_exists", lambda b, k: True)
-    # No encode_texts or iter_input_lines patch needed — shouldn't run.
+def test_process_file_skips_when_output_exists_and_no_input_timestamp(monkeypatch):
+    # InputKey without last_modified → fallback "output exists ⇒ skip" semantics.
+    monkeypatch.setattr(s3io, "head_last_modified", lambda b, k: _T0)
     monkeypatch.setattr(
         s3io,
         "upload_local_file",
@@ -116,26 +120,66 @@ def test_process_file_skips_when_output_exists(monkeypatch):
     assert pl.process_file(input_key, MagicMock(), _cfg(force=False)) is False
 
 
-def test_process_file_force_overrides_skip(monkeypatch, fake_input_records):
-    monkeypatch.setattr(s3io, "object_exists", lambda b, k: True)
+def test_process_file_skips_when_output_newer_than_input(monkeypatch):
+    monkeypatch.setattr(s3io, "head_last_modified", lambda b, k: _T_LATER)
+    monkeypatch.setattr(
+        s3io,
+        "upload_local_file",
+        MagicMock(side_effect=AssertionError("upload must not be called on skip")),
+    )
+    input_key = s3io.InputKey("SNL", "EXP", 1912, "SNL/EXP/EXP-1912.jsonl.bz2", last_modified=_T0)
+    assert pl.process_file(input_key, MagicMock(), _cfg(force=False)) is False
+
+
+def test_process_file_reprocesses_when_input_newer_than_output(
+    monkeypatch, fake_input_records, caplog
+):
+    monkeypatch.setattr(s3io, "head_last_modified", lambda b, k: _T0)
     monkeypatch.setattr(s3io, "upload_local_file", lambda *a, **k: None)
     monkeypatch.setattr(
         em,
         "encode_texts",
         lambda model, texts, **_: np.asarray([[0.0, 0.0] for _ in texts], dtype=np.float32),
     )
-    input_key = s3io.InputKey("SNL", "EXP", 1912, "SNL/EXP/EXP-1912.jsonl.bz2")
+    input_key = s3io.InputKey(
+        "SNL", "EXP", 1912, "SNL/EXP/EXP-1912.jsonl.bz2", last_modified=_T_LATER
+    )
+    with caplog.at_level("INFO"):
+        assert pl.process_file(input_key, MagicMock(), _cfg(force=False)) is True
+    assert any("input newer than output" in r.message for r in caplog.records)
+
+
+def test_process_file_force_overrides_skip(monkeypatch, fake_input_records):
+    # --force must not even consult head_last_modified.
+    monkeypatch.setattr(
+        s3io,
+        "head_last_modified",
+        MagicMock(side_effect=AssertionError("head must not be called under --force")),
+    )
+    monkeypatch.setattr(s3io, "upload_local_file", lambda *a, **k: None)
+    monkeypatch.setattr(
+        em,
+        "encode_texts",
+        lambda model, texts, **_: np.asarray([[0.0, 0.0] for _ in texts], dtype=np.float32),
+    )
+    input_key = s3io.InputKey(
+        "SNL", "EXP", 1912, "SNL/EXP/EXP-1912.jsonl.bz2", last_modified=_T0
+    )
     assert pl.process_file(input_key, MagicMock(), _cfg(force=True)) is True
 
 
 def test_process_provider_dry_run(monkeypatch):
     keys = [
-        s3io.InputKey("SNL", "EXP", 1910, "SNL/EXP/EXP-1910.jsonl.bz2"),
-        s3io.InputKey("SNL", "EXP", 1911, "SNL/EXP/EXP-1911.jsonl.bz2"),
+        s3io.InputKey("SNL", "EXP", 1910, "SNL/EXP/EXP-1910.jsonl.bz2", last_modified=_T0),
+        s3io.InputKey("SNL", "EXP", 1911, "SNL/EXP/EXP-1911.jsonl.bz2", last_modified=_T0),
     ]
     monkeypatch.setattr(s3io, "list_input_keys", lambda **kw: iter(keys))
-    # First exists (skip), second missing (would process).
-    monkeypatch.setattr(s3io, "object_exists", lambda b, k: k.endswith("EXP-1910.jsonl.bz2"))
+    # 1910 output is newer than its input → skip. 1911 output is missing → would process.
+    monkeypatch.setattr(
+        s3io,
+        "head_last_modified",
+        lambda b, k: _T_LATER if k.endswith("EXP-1910.jsonl.bz2") else None,
+    )
     monkeypatch.setattr(pl, "process_file", MagicMock(side_effect=AssertionError("no work in dry run")))
 
     summary = pl.process_provider("SNL", model=None, cfg=_cfg(), dry_run=True)

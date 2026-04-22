@@ -12,6 +12,8 @@ Living step list. Statuses: `todo` / `wip` / `done` / `deferred`. Slug names are
 | 6 | create-cli | done | `.progress/create-cli/` |
 | 7 | validate-cli | done | `.progress/validation-metric/` |
 | 8 | e2e-docs | done | no |
+| 9 | docker-runai | done | `.progress/docker-runai/` |
+| 10 | reembed-on-change | done | `.progress/reembed-on-change/` |
 
 ## Step details
 
@@ -38,3 +40,20 @@ Registry + chonkie semantic strategy (threshold 0.5, chunk_size 1024, min_senten
 
 ### 8. e2e-docs
 Tiny local fixture end-to-end; polish `README.md`; resolve or explicitly defer remaining "Things to decide" items in `CLAUDE.md`.
+
+### 9. docker-runai
+Container image + Run:AI submission for EPFL RCP. Reference: `feat/docker` branch. Deliverables:
+- `Dockerfile` based on `nvcr.io/nvidia/pytorch:25.03-py3`, LDAP-matched user (PVC ownership), `pip install .` from copied source, `ENTRYPOINT ["impresso-embed-create"]`.
+- `.env.docker.example` (LDAP UID/GID, registry/project, Harbor robot creds).
+- `Makefile` (slim — docker build/push, k8s secrets, runai submit + interactive debug). No data-processing logic; the CLI handles that.
+- `.gitignore` entries for `.env.docker` and `config.local.mk`.
+- `CLAUDE.md` section linking to the workflow.
+Decisions and gotchas in `.progress/docker-runai/notes.md`.
+
+### 10. reembed-on-change
+Re-embed an output when its input has been re-uploaded on S3, without resurrecting the old stamp tree or taking on the full `impresso_essentials.versioning` manifest system yet. Mechanism: compare S3 `LastModified` of input vs existing output at skip-decision time. `--force` still overrides unconditionally.
+- `io.py`: add `last_modified: datetime | None` to `InputKey`, populate from `list_objects_v2` (no extra HEAD). Add `head_last_modified(bucket, key) -> datetime | None` (None on 404).
+- `pipeline.py`: rewrite the skip branch in `process_file` and its dry-run twin in `process_provider` to compare timestamps. Distinct log lines for "skip (up-to-date)" vs "reprocess (input newer)".
+- Tests: cover {output missing, output newer, output older, --force overrides}. Update existing `object_exists` patches to the new helper where the skip path is exercised.
+- `CLAUDE.md`: record the decision under "Decisions recorded"; note the known gap (versioning manifest still deferred).
+Rationale, trade-offs, and the explicit choice against option 2/3/4 in `.progress/reembed-on-change/notes.md`.

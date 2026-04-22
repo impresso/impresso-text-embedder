@@ -65,6 +65,28 @@ def _resolve_chunker(cfg: PipelineConfig) -> ChunkingStrategy | None:
     return get_strategy(cfg.chunking_strategy_name)
 
 
+def _should_skip(
+    input_key: s3io.InputKey,
+    output_bucket: str,
+    output_key: str,
+) -> tuple[bool, str]:
+    """Decide whether an existing output is still fresh relative to its input.
+
+    Returns ``(skip, reason)``. ``reason`` is a short string suitable for logging
+    and is meaningful whether ``skip`` is True or False.
+    """
+    output_lm = s3io.head_last_modified(output_bucket, output_key)
+    if output_lm is None:
+        return False, "output missing"
+    # Without an input timestamp (e.g. manually-built InputKey in tests) keep the
+    # old "output exists ⇒ skip" semantics.
+    if input_key.last_modified is None:
+        return True, "output exists (no input timestamp)"
+    if output_lm >= input_key.last_modified:
+        return True, f"output up-to-date (input={input_key.last_modified!s} output={output_lm!s})"
+    return False, f"input newer than output (input={input_key.last_modified!s} output={output_lm!s})"
+
+
 def process_file(
     input_key: s3io.InputKey,
     model: SentenceTransformer,
@@ -84,13 +106,20 @@ def process_file(
         model_slug=slug,
     )
 
-    if not cfg.force and s3io.object_exists(cfg.output_bucket, output_key):
-        log.info(
-            "skip s3://%s/%s (output exists; pass --force to overwrite)",
-            cfg.output_bucket,
-            output_key,
-        )
-        return False
+    if not cfg.force:
+        skip, reason = _should_skip(input_key, cfg.output_bucket, output_key)
+        if skip:
+            log.info(
+                "skip s3://%s/%s (%s; pass --force to overwrite)",
+                cfg.output_bucket,
+                output_key,
+                reason,
+            )
+            return False
+        if reason != "output missing":
+            log.info(
+                "reprocess s3://%s/%s (%s)", cfg.output_bucket, output_key, reason
+            )
 
     embedder_tag = build_embedder_tag(cfg.model_name, cfg.model_revision)
     if chunker is None:
@@ -166,13 +195,17 @@ def process_provider(
             output_key = s3io.build_output_key(
                 input_key.provider, input_key.alias, input_key.year, model_slug(cfg.model_name)
             )
-            exists = (not cfg.force) and s3io.object_exists(cfg.output_bucket, output_key)
-            if exists:
-                summary["skipped"] += 1
-                log.info("[dry-run] would skip %s", input_key.key)
-            else:
+            if cfg.force:
                 summary["processed"] += 1
-                log.info("[dry-run] would process %s", input_key.key)
+                log.info("[dry-run] would process %s (forced)", input_key.key)
+            else:
+                skip, reason = _should_skip(input_key, cfg.output_bucket, output_key)
+                if skip:
+                    summary["skipped"] += 1
+                    log.info("[dry-run] would skip %s (%s)", input_key.key, reason)
+                else:
+                    summary["processed"] += 1
+                    log.info("[dry-run] would process %s (%s)", input_key.key, reason)
             continue
 
         did = process_file(input_key, model, cfg, chunker=chunker)
