@@ -125,12 +125,17 @@ Don't invent a complex multi-process pipeline. A single process with a small thr
 
 The shared Impresso utilities live at <https://github.com/impresso/impresso-essentials> (docs: <https://impresso.github.io/impresso-essentials/_build/html/index.html>). Prefer these over rolling our own S3/IO code:
 
-- `impresso_essentials.io.s3` — `get_s3_client`, `get_s3_resource`, `get_bucket`, `get_storage_options`, `read_jsonlines`, `upload_to_s3`, `list_s3_directories`, `list_providers_and_aliases`, `fixed_s3fs_glob`, `s3_glob_with_size`, `extract_provider_alias_key`, `provider_in_path`. Use these instead of hand-rolling `boto3.resource("s3", ...)` or `smart_open` wrappers.
+- `impresso_essentials.io.s3` — `get_s3_client`, `get_s3_resource`, `get_bucket`, `get_storage_options`, `upload_to_s3`, `list_s3_directories`, `list_providers_and_aliases`, `fixed_s3fs_glob`, `s3_glob_with_size`, `extract_provider_alias_key`, `provider_in_path`. Prefer these over hand-rolling `boto3.resource("s3", ...)` / `smart_open` wrappers.
 - `impresso_essentials.io.fs_utils` — local FS helpers.
 - `impresso_essentials.text_utils` — text processing.
 - `impresso_essentials.versioning.*` — data manifests. Relevant if we start emitting a manifest for the embedding outputs (not an immediate requirement).
 
-Add `impresso-essentials` as a regular dependency. Pin a known-good version once picked.
+**Two deliberate exceptions** (see `.progress/io-layer/notes.md`):
+
+- `read_jsonlines` is **not** used for the encoder hot path — it does `body.read()` + `bz2.decompress(data)` and loads the full file into memory, which breaks the streaming/prefetch model. Our `io.iter_jsonl_bz2` opens the S3 body stream and wraps it with `bz2.open` for chunked decoding.
+- `upload_to_s3` returns `bool` and swallows exceptions; our `io.upload_local_file` wraps it and raises on `False`, so a failed upload can't masquerade as a persisted output.
+
+`impresso-essentials` is pinned at `>=1.4.1` in `pyproject.toml`.
 
 ---
 

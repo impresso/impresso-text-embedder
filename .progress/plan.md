@@ -4,9 +4,9 @@ Living step list. Statuses: `todo` / `wip` / `done` / `deferred`. Slug names are
 
 | # | Slug | Status | Notes folder? |
 |---|---|---|---|
-| 1 | package-skeleton | wip | no |
-| 2 | io-layer | todo | no |
-| 3 | schema-text-rebuild | todo | no |
+| 1 | package-skeleton | done | no |
+| 2 | io-layer | done | `.progress/io-layer/` |
+| 3 | schema-text-rebuild | wip | no |
 | 4 | model-encoder | todo | `.progress/gpu-throughput/` |
 | 5 | chunking | todo | `.progress/chunking/` |
 | 6 | create-cli | todo | light |
