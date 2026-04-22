@@ -1,41 +1,72 @@
 # Impresso Multilingual Text Embedder
 
-This repository offers tools for embedding texts in multiple languages with an efficient workflow. It uses the `transformers` library by Hugging Face and the `make` tool to manage large datasets. `Make` ensures robust and incremental processing, allowing you to handle new data, resume tasks, and run processes across different machines, all while avoiding redundant work.
+This repository offers tools for embedding texts in multiple languages with an efficient workflow. It uses the
+`transformers` library by Hugging Face and the `make` tool to manage large datasets. `Make` ensures robust and
+incremental processing, allowing you to handle new data, resume tasks, and run processes across different machines, all
+while avoiding redundant work.
+
+The embedder supports:
+
+- **Text-level embeddings** (full page / full article)
+- **Sentence-level embeddings**
+- **Chunk-level embeddings**
+
+`make` ensures reliable, incremental, and resumable processing across machines and environments. All outputs can be
+uploaded safely to S3 or kept locally.
+
+---
 
 ## Features
 
-- **Efficient Storage Management:** Minimal local storage is required as necessary data for each year of a newspaper are downloaded on-the-fly and truncated after uploading.
+- **Efficient Storage Management:** Minimal local storage is required as necessary data for each year of a newspaper are
+  downloaded on-the-fly and truncated after uploading.
 - **Parallel Processing:** Processes run in parallel to optimize throughput.
-- **Selective Processing:** Only the necessary processing steps are executed, ensuring efficiency by not reprocessing existing outputs on S3.
+- **Selective Processing:** Only the necessary processing steps are executed, ensuring efficiency by not reprocessing
+  existing outputs on S3.
 - **S3 Integration:** Integration with S3 for storing and resuming processing. The
   system ensures no overwriting of files or partial uploads due to interruptions. It is
-  also posssible to run everything locally without S3.
-- **Custom Embedding Options:** Flexible configurations via normal environment variables or make variables, including the ability to specify model versions and filter text data.
+  also possible to run everything locally without S3.
+- **Custom Embedding Options:** Flexible configurations via normal environment variables or make variables, including
+  the ability to specify model versions and filter text data.
 
-### Missing Features
+---
+
+# Missing Features (Upcoming)
 
 - Batch processing of texts is not yet implemented. This will be added in a future
   release.
 - Installing specialized xformer implementation for sparse attention inference is not yet
-  imlemented. This shoulld be added in a future release for faster inference.
+  implemented. This should be added in a future release for faster inference.
+-
 
-## Concepts
+---
 
-### Storage Locations
+# Concepts
 
-- **Local Storage:** Temporary disk space used for processing tasks. This disk space can
-  be fast storage.
-- **S3 Storage:** Permanent storage where final results are stored. Processing can be resumed from this storage.
+## Storage Layout
 
-### File Stamps
+### Local Storage
 
-To manage dependencies, local file stamps are used:
+Temporary workspace used to mirror S3 structure.
 
-- **Input Stamps (`.stamp`):** Indicate the status of input files on S3.
-- **Output Stamps (no extension or `.done`):** Indicate the completion status of output
-  files on S3. Make uses these to determine if a file needs to be processed or not.
+### S3 Storage
 
-Local stamps help `make` determine which files need to be processed or skipped. The helper script `lib/sync_s3_filestamps.py` manages these stamps by syncing them with S3.
+Permanent storage for processed embeddings (optional).
+
+```
+s3://$OUT_S3_BUCKET_PROCESSED_DATA/textembeddings-<MODEL>-<VERSION>/<PROVIDER>/<NEWSPAPER>/<NEWSPAPER-YEAR>.jsonl.bz2
+```
+
+## File Stamps
+
+`make` uses local stamp files to track progress:
+
+- **`.stamp` files** indicate S3 input availability
+- **`.done` files** indicate processed outputs
+
+A helper script `lib/sync_s3_filestamps.py` keeps stamps synced with S3.
+
+---
 
 ### File Organization
 
@@ -46,105 +77,189 @@ The processing follows a structured organization:
 
 ```plaintext
 # Example directory structure
-BUILD_DIR/BUCKET/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
-BUILD_DIR/BUCKET/PROCESSING_TYPE/VERSION/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
+BUILD_DIR/BUCKET/PROVIDER/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
+BUILD_DIR/BUCKET/PROCESSING_TYPE-VERSION/PROVIDER/NEWSPAPER/<NEWSPAPER-YEAR>.jsonl.bz2
 ```
 
-## Setup
+Example
 
-1. **Clone the Repository:**
+```
+BUILD_DIR/
+  # input bucket
+  000-processing-test-samples/
+    lingproc/lingproc-test-v1.0.0/
+      SNL/
+        EXP/
+          EXP-1912.jsonl.bz2
+  # output bucket
+  140-processed-data-sandbox/
+    textembeddings-gte-multilingual-base-v1.0.1/
+        SNL/
+          EXP/
+            EXP-1912.jsonl.bz2
+```
 
-   ```bash
-   git clone git@github.com:impresso/impresso-text-embedder.git
-   cd impresso-text-embedder
-   ```
+---
 
-2. **Configure S3 Credentials:**
-   Copy the `dotenv.sample` file to `.env`. Modify the `.env` file to include your AWS credentials:
+# Setup
 
-   ```plaintext
-   SE_ACCESS_KEY=<your-access-key>
-   SE_SECRET_KEY=<your-secret-key>
-   SE_HOST_URL=<your host name>
-   ```
-
-3. **Install Dependencies:**
-   Ensure `make` and `python3` and `pip3` are installed. For GPU support of pytorch, go to
-   https://pytorch.org/get-started/locally/ and get your installation command. Run:
-
-   ```bash
-   pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-   pip3 install -r requirements.txt
-
-   # or pipenv install
-   ```
-
-4. **Setup Environment and make variables**:
-
-   ```bash
-   cp dotenv.sample .env  # edit .env with your S3 credentials
-   cp local.config.sample.mk local.config.mk  # edit local.config.mk with your local settings
-   ```
-
-5. **Setup Directories and Model:**
-   Create necessary directories, the list of newspapers to process and download the Hugging Face model:
-   ```bash
-   make setup
-   ```
-
-## Usage
-
-### Makefile Targets
+## 1. Clone the Repository
 
 ```bash
-make help
+git clone git@github.com:impresso/impresso-text-embedder.git
+cd impresso-text-embedder
 ```
 
-### Running the Embedder
+## 2. Configure S3 Credentials
 
-1. **Process a single newspaper:**
-   You can specify a list of newspapers to process using the `NEWSPAPER_LIST_FILE`. The default list is generated automatically from the S3 bucket:
+```bash
+cp dotenv.sample .env
+```
 
-   ```bash
-   make newspaper
-   ```
+Edit `.env`:
 
-2. **Parallel Processing of each newspaper:**
-   To process newspapers in parallel, use:
+```
+SE_ACCESS_KEY=<your-access-key>
+SE_SECRET_KEY=<your-secret-key>
+SE_HOST_URL=<host>
+```
 
-   ```bash
-   make each
-   ```
+## 3. Install Dependencies
 
-## Data flow overview:
+```bash
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip3 install -r requirements.txt
+```
+
+## 4. Setup Local Configuration
+
+```bash
+cp local.config.sample.mk config.local.mk
+```
+
+You must now edit `config.local.mk` (full guide below).
+
+## 5. Create Directories & Download Model
+
+```bash
+make setup
+```
+
+---
+
+# Running the Embedder
+
+```
+make newspaper     # process according to list in NEWSPAPER_LIST_FILE
+make each          # process all newspapers in parallel
+make help          # list all targets
+```
+
+---
+
+# Embedding Modes
+
+Set the embedding mode in `config.local.mk`:
+
+```makefile
+EMBEDDING_LEVEL_OPTION := sentence
+# or: text, chunk
+```
+
+## 1. Text-Level Embedding
+
+Embeds each full text object (page/article).
+
+- Fastest mode.
+- Best for document retrieval.
+- No segmentation but texts below `EMBEDDING_MIN_CHAR_LENGTH` could be skipped.
+
+## 2. Sentence-Level Embedding
+
+Embeds each sentence individually.
+
+- Uses a multilingual sentence segmenter.
+- Short sentences (< `EMBEDDING_MIN_CHAR_LENGTH`) could be skipped.
+- Best for search, QA, and fine-grained retrieval.
+
+## 3. Chunk-Level Embedding
+
+Embeds long texts split into fixed-size chunks.
+
+- Prevents losing context when texts exceed model max length.
+- Produces stable embeddings for long documents.
+
+---
+
+# Configuration Guide (`config.local.mk`)
+
+Below is an example config file you **must** customize:
+
+```makefile
+# config.local.mk (example)
+
+$(info Make: Including config.local.mk: $(shell readlink -f config.local.mk))
+
+BUILD_DIR := build.d
+
+# Model
+CREATOR_NAME := Alibaba-NLP
+HF_MODEL_NAME := gte-multilingual-base
+HF_MODEL_VERSION := f7d567e
+HF_FULL_MODEL_NAME := $(CREATOR_NAME)/$(HF_MODEL_NAME)
+
+# Embedding level: text | sentence | chunk
+EMBEDDING_LEVEL_OPTION := chunk
+
+# Storage (input)
+IN_S3_PREFIXES := lingproc/lingproc-test-v1.0.0
+IN_S3_BUCKET_REBUILT := 000-processing-test-samples
+
+# Storage (output)
+OUT_S3_BUCKET_PROCESSED_DATA := 140-processed-data-sandbox
+OUT_S3_PROCESSED_INFIX := textembeddings-$(HF_MODEL_NAME)
+OUT_S3_PROCESSED_VERSION := v1.0.1
+
+# Text filtering
+EMBEDDING_MIN_CHAR_LENGTH := 10
+
+# Local model cache
+HF_HOME := ./hf.d
+
+# Parallel processing
+MAKE_PARALLEL_OPTION := --jobs 2
+
+# Optional: Filter newspapers
+PROVIDER  := SNL
+NEWSPAPER := EXP
+
+# Logging
+LOGGING_LEVEL := WARNING
+```
+
+---
+
+# Data Flow Overview
 
 ```mermaid
 flowchart LR
-    %% Nodes
-    %% External Entities
-
-
 
     subgraph cluster_local ["Local Machine"]
         style cluster_local fill:#FFF3E0,stroke:#FF6F00,stroke-width:1px
 
-        %% Processes
         F{{"Text Embedding Processor"}}
-
-        %% Data Stores
         B[("Local Rebuilt Data")]
         E[("Text Embedding Model")]
         C[("Processed Output Data")]
 
-
     end
+
     subgraph cluster_s3 ["S3 Storage"]
         style cluster_s3 fill:#E0F7FA,stroke:#0097A7,stroke-width:1px
+
         A[/"Rebuilt Data"/]
         D[/"Processed Data"/]
 
-
-                %% Data Flows
         A -->|Sync Input| B
         B -->|Data| F
         E -->|Model| F
@@ -152,8 +267,9 @@ flowchart LR
         C -->|Upload Output| D
         D -->|Sync Output| C
     end
-
 ```
+
+---
 
 ## About
 
