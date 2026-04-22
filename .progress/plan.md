@@ -8,8 +8,8 @@ Living step list. Statuses: `todo` / `wip` / `done` / `deferred`. Slug names are
 | 2 | io-layer | done | `.progress/io-layer/` |
 | 3 | schema-text-rebuild | done | no |
 | 4 | model-encoder | done | `.progress/gpu-throughput/` |
-| 5 | chunking | wip | `.progress/chunking/` |
-| 6 | create-cli | todo | light |
+| 5 | chunking | done | `.progress/chunking/` |
+| 6 | create-cli | wip | light |
 | 7 | validate-cli | todo | `.progress/validation-metric/` |
 | 8 | e2e-docs | todo | no |
 
