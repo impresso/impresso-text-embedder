@@ -1,8 +1,29 @@
-*.d/*
+# Secrets / local config
 .env
-.DS_Store
-.idea
-lib/__pycache__/
-config.local.mk
-lib/__pycache__/
+.env.local
 
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build / envs
+build/
+dist/
+.venv/
+*.d/
+
+# HuggingFace cache (if user opts into local caching via HF_HOME=./hf.d)
+hf.d/
+
+# Old scratch dirs from pre-migration layout
+build.d/

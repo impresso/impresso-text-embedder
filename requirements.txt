@@ -1,6 +1,0 @@
-python-dotenv
-smart-open
-sentence_transformers
-numpy==1.26
-boto3
-tqdm
