@@ -10,8 +10,8 @@ Living step list. Statuses: `todo` / `wip` / `done` / `deferred`. Slug names are
 | 4 | model-encoder | done | `.progress/gpu-throughput/` |
 | 5 | chunking | done | `.progress/chunking/` |
 | 6 | create-cli | done | `.progress/create-cli/` |
-| 7 | validate-cli | wip | `.progress/validation-metric/` |
-| 8 | e2e-docs | todo | no |
+| 7 | validate-cli | done | `.progress/validation-metric/` |
+| 8 | e2e-docs | wip | no |
 
 ## Step details
 
