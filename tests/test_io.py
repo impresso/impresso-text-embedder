@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import bz2
+import hashlib
 import io as _io
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -170,17 +171,167 @@ class TestIterJsonlBz2:
         fake_resource.Object.assert_called_once_with("b", "k")
 
 
+class TestIterJsonlBz2Path:
+    def test_streams_lines_from_local_file(self, tmp_path):
+        path = tmp_path / "f.jsonl.bz2"
+        with bz2.open(path, "wt", encoding="utf-8") as fh:
+            fh.write('{"id":1}\n{"id":2}\n\n')  # trailing blank line
+        assert list(io.iter_jsonl_bz2_path(path)) == ['{"id":1}', '{"id":2}']
+
+    def test_accepts_string_path(self, tmp_path):
+        path = tmp_path / "f.jsonl.bz2"
+        with bz2.open(path, "wt", encoding="utf-8") as fh:
+            fh.write('{"x":1}\n')
+        assert list(io.iter_jsonl_bz2_path(str(path))) == ['{"x":1}']
+
+
+class TestDownloadToLocal:
+    def _fake_resource(self):
+        bucket = MagicMock()
+        resource = MagicMock()
+        resource.Bucket.return_value = bucket
+        return resource, bucket
+
+    def test_calls_download_file_with_default_config(self, tmp_path):
+        resource, bucket = self._fake_resource()
+        dest = tmp_path / "out.jsonl.bz2"
+        with patch.object(io, "get_s3_resource", return_value=resource):
+            io.download_to_local("b", "k/v.jsonl.bz2", dest)
+        resource.Bucket.assert_called_once_with("b")
+        args, kwargs = bucket.download_file.call_args
+        assert args == ("k/v.jsonl.bz2", str(dest))
+        assert kwargs["Config"] is io.DEFAULT_TRANSFER_CONFIG
+
+    def test_accepts_custom_transfer_config(self, tmp_path):
+        from boto3.s3.transfer import TransferConfig
+
+        resource, bucket = self._fake_resource()
+        custom = TransferConfig(max_concurrency=2)
+        with patch.object(io, "get_s3_resource", return_value=resource):
+            io.download_to_local("b", "k", tmp_path / "x", transfer_config=custom)
+        _, kwargs = bucket.download_file.call_args
+        assert kwargs["Config"] is custom
+
+    def test_propagates_errors(self, tmp_path):
+        resource, bucket = self._fake_resource()
+        bucket.download_file.side_effect = OSError("no route to host")
+        with patch.object(io, "get_s3_resource", return_value=resource):
+            with pytest.raises(OSError, match="no route"):
+                io.download_to_local("b", "k", tmp_path / "x")
+
+
 class TestUploadLocalFile:
-    def test_raises_when_upload_returns_false(self, tmp_path):
-        f = tmp_path / "x.txt"
-        f.write_text("hi")
-        with patch.object(io, "upload_to_s3", return_value=False):
+    @staticmethod
+    def _make_file(tmp_path, name="x.txt", payload=b"hi"):
+        f = tmp_path / name
+        f.write_bytes(payload)
+        md5 = hashlib.md5(payload, usedforsecurity=False).hexdigest()
+        return f, md5, len(payload)
+
+    @staticmethod
+    def _fakes(upload_side_effect=None, head_response=None, head_side_effect=None):
+        """Build a (resource, bucket, client) triple of MagicMocks."""
+        fake_bucket = MagicMock()
+        if upload_side_effect is not None:
+            fake_bucket.upload_file.side_effect = upload_side_effect
+        fake_resource = MagicMock()
+        fake_resource.Bucket.return_value = fake_bucket
+        fake_client = MagicMock()
+        if head_side_effect is not None:
+            fake_client.head_object.side_effect = head_side_effect
+        elif head_response is not None:
+            fake_client.head_object.return_value = head_response
+        return fake_resource, fake_bucket, fake_client
+
+    @staticmethod
+    def _patch(fake_resource, fake_client):
+        return patch.multiple(
+            io,
+            get_s3_resource=MagicMock(return_value=fake_resource),
+            get_s3_client=MagicMock(return_value=fake_client),
+        )
+
+    def test_raises_when_upload_fails(self, tmp_path):
+        f, _, _ = self._make_file(tmp_path)
+        fake_resource, _, fake_client = self._fakes(
+            upload_side_effect=OSError("boom")
+        )
+        with self._patch(fake_resource, fake_client):
             with pytest.raises(RuntimeError, match="upload"):
                 io.upload_local_file(f, "b", "k")
+        # upload failed before HEAD could run
+        fake_client.head_object.assert_not_called()
 
-    def test_silent_on_success(self, tmp_path):
-        f = tmp_path / "x.txt"
-        f.write_text("hi")
-        with patch.object(io, "upload_to_s3", return_value=True) as mocked:
+    def test_success_single_part_verifies_etag(self, tmp_path):
+        f, md5, size = self._make_file(tmp_path)
+        fake_resource, fake_bucket, fake_client = self._fakes(
+            head_response={"ContentLength": size, "ETag": f'"{md5}"'}
+        )
+        with self._patch(fake_resource, fake_client):
             io.upload_local_file(f, "b", "k")
-        mocked.assert_called_once_with(str(f), "k", "b")
+        fake_resource.Bucket.assert_called_once_with("b")
+        fake_bucket.upload_file.assert_called_once_with(str(f), "k")
+        fake_client.head_object.assert_called_once_with(Bucket="b", Key="k")
+        fake_client.delete_object.assert_not_called()
+
+    def test_success_multipart_skips_etag_check(self, tmp_path):
+        f, md5, size = self._make_file(tmp_path)
+        # Multipart ETag has a `-N` suffix; the hex before the dash is NOT the
+        # local MD5, but we should accept it and only verify size.
+        fake_resource, _, fake_client = self._fakes(
+            head_response={"ContentLength": size, "ETag": '"deadbeef-4"'}
+        )
+        with self._patch(fake_resource, fake_client):
+            io.upload_local_file(f, "b", "k")
+        fake_client.delete_object.assert_not_called()
+        # Sanity: the local MD5 is not used for comparison in the multipart path
+        assert md5 != "deadbeef"
+
+    def test_size_mismatch_raises_and_deletes(self, tmp_path):
+        f, md5, size = self._make_file(tmp_path)
+        fake_resource, _, fake_client = self._fakes(
+            head_response={"ContentLength": size + 1, "ETag": f'"{md5}"'}
+        )
+        with self._patch(fake_resource, fake_client):
+            with pytest.raises(RuntimeError, match="size mismatch"):
+                io.upload_local_file(f, "b", "k")
+        fake_client.delete_object.assert_called_once_with(Bucket="b", Key="k")
+
+    def test_etag_mismatch_single_part_raises_and_deletes(self, tmp_path):
+        f, _, size = self._make_file(tmp_path)
+        fake_resource, _, fake_client = self._fakes(
+            head_response={"ContentLength": size, "ETag": '"00000000000000000000000000000000"'}
+        )
+        with self._patch(fake_resource, fake_client):
+            with pytest.raises(RuntimeError, match="ETag mismatch"):
+                io.upload_local_file(f, "b", "k")
+        fake_client.delete_object.assert_called_once_with(Bucket="b", Key="k")
+
+    def test_head_failure_raises_and_attempts_delete(self, tmp_path):
+        f, _, _ = self._make_file(tmp_path)
+        err = ClientError({"Error": {"Code": "500", "Message": "boom"}}, "HeadObject")
+        fake_resource, _, fake_client = self._fakes(head_side_effect=err)
+        with self._patch(fake_resource, fake_client):
+            with pytest.raises(RuntimeError, match="HEAD"):
+                io.upload_local_file(f, "b", "k")
+        fake_client.delete_object.assert_called_once_with(Bucket="b", Key="k")
+
+    def test_delete_failure_does_not_shadow_primary_error(self, tmp_path):
+        f, md5, size = self._make_file(tmp_path)
+        fake_resource, _, fake_client = self._fakes(
+            head_response={"ContentLength": size + 1, "ETag": f'"{md5}"'}
+        )
+        fake_client.delete_object.side_effect = OSError("cleanup died")
+        with self._patch(fake_resource, fake_client):
+            with pytest.raises(RuntimeError, match="size mismatch"):
+                io.upload_local_file(f, "b", "k")
+
+    def test_strips_s3_prefix_from_key(self, tmp_path):
+        f, md5, size = self._make_file(tmp_path)
+        fake_resource, fake_bucket, fake_client = self._fakes(
+            head_response={"ContentLength": size, "ETag": f'"{md5}"'}
+        )
+        with self._patch(fake_resource, fake_client):
+            io.upload_local_file(f, "b", "s3://k/leading")
+        fake_bucket.upload_file.assert_called_once_with(str(f), "k/leading")
+        fake_client.head_object.assert_called_once_with(Bucket="b", Key="k/leading")

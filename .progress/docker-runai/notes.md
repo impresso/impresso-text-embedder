@@ -94,6 +94,17 @@ call doesn't print the v1-CLI deprecation banner.
 - The `HF_HOME` PVC path must already exist (or be creatable by the LDAP
   user) — Run:AI doesn't `mkdir -p` it. The model loader will, on first
   use, but the **parent** must be writable.
+- **`impresso-essentials` is not a dep — it is vendored.** The package
+  hard-pins `numpy==2.2.1` (plus dask, pandas, pyarrow…) in its metadata,
+  which would uninstall NGC's `numpy==1.26.4` and break apex/NCCL/
+  transformer-engine/xformers (all compiled against the numpy-1.x ABI).
+  A `--no-deps` install also fails: `impresso_essentials.io.s3` does
+  `import dask.bag as db` at module level. The three helpers we used
+  (`get_s3_client`, `get_s3_resource`, `upload_to_s3`) are vendored into
+  `src/impresso_text_embedder/io.py`. The Dockerfile's only guardrail on
+  this point is `assert numpy.__version__.startswith('1.26')` after
+  `pip install .`. See step 12 of `.progress/plan.md` and
+  `.progress/io-layer/notes.md`.
 
 ## Out of scope (for now)
 

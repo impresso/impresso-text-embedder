@@ -1,28 +1,74 @@
 """S3 I/O helpers for impresso-text-embedder.
 
-Thin layer over ``impresso_essentials.io.s3`` where its semantics match our needs,
-and direct boto3 calls for the streaming reader and existence check. See
-``.progress/io-layer/notes.md`` for the reasoning.
+Thin wrappers around boto3 for the streaming reader, existence check, and
+upload. See ``.progress/io-layer/notes.md`` for the reasoning (including why
+the three S3 helpers below are vendored rather than imported from
+``impresso_essentials.io.s3``).
 """
 
 from __future__ import annotations
 
 import bz2
+import hashlib
 import logging
+import os
 import re
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+import boto3
+from boto3.resources.base import ServiceResource
+from boto3.s3.transfer import TransferConfig
+from botocore.client import BaseClient
+from botocore.config import Config
 from botocore.exceptions import ClientError
-from impresso_essentials.io.s3 import (
-    get_s3_client,
-    get_s3_resource,
-    upload_to_s3,
-)
 
 log = logging.getLogger(__name__)
+
+DEFAULT_S3_HOST_URL = "https://os.zhdk.cloud.switch.ch/"
+
+# Disable boto3's default flex-checksums for PutObject / GetObject. The
+# defaults (``when_supported``) make PutObject send the body as ``aws-chunked``
+# with a trailer and no Content-Length, which Ceph RadosGW (Switch Engines)
+# rejects with ``MissingContentLength``. ``when_required`` restores a plain
+# Content-Length'd PUT. Needs boto3>=1.36.5 / s3transfer>=0.11.2 to propagate
+# through the high-level upload_file path. See
+# ``.progress/upload-integrity/notes.md``.
+_S3_CONFIG = Config(
+    request_checksum_calculation="when_required",
+    response_checksum_validation="when_required",
+)
+
+
+def get_s3_client(host_url: str | None = None) -> BaseClient:
+    """Return a boto3 S3 client authenticated via ``SE_*`` env vars.
+
+    Reads ``SE_ACCESS_KEY``, ``SE_SECRET_KEY`` from the environment (the CLI
+    entry points load ``.env`` once at startup). ``host_url`` falls back to
+    ``SE_HOST_URL`` then to the Impresso default endpoint.
+    """
+    endpoint = host_url or os.environ.get("SE_HOST_URL") or DEFAULT_S3_HOST_URL
+    return boto3.client(
+        "s3",
+        aws_access_key_id=os.environ["SE_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["SE_SECRET_KEY"],
+        endpoint_url=endpoint,
+        config=_S3_CONFIG,
+    )
+
+
+def get_s3_resource(host_url: str | None = None) -> ServiceResource:
+    """Return a boto3 S3 resource authenticated via ``SE_*`` env vars."""
+    endpoint = host_url or os.environ.get("SE_HOST_URL") or DEFAULT_S3_HOST_URL
+    return boto3.resource(
+        "s3",
+        aws_access_key_id=os.environ["SE_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["SE_SECRET_KEY"],
+        endpoint_url=endpoint,
+        config=_S3_CONFIG,
+    )
 
 INPUT_FILENAME_RE = re.compile(r"^(?P<alias>[^/]+?)-(?P<year>\d{4})\.jsonl\.bz2$")
 OUTPUT_PREFIX = "embeddings/docs"
@@ -149,8 +195,152 @@ def iter_jsonl_bz2(bucket: str, key: str) -> Iterator[str]:
                 yield line
 
 
+def iter_jsonl_bz2_path(path: str | Path) -> Iterator[str]:
+    """Stream lines from a local ``.jsonl.bz2`` file.
+
+    Same semantics as :func:`iter_jsonl_bz2` but reads from disk. Used by the
+    prefetched-download path in :mod:`pipeline`.
+    """
+    with bz2.open(str(path), mode="rt", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.rstrip("\n")
+            if line:
+                yield line
+
+
+# Defaults chosen from boto3's S3 guide plus the rationale in
+# ``.progress/io-throughput/notes.md``. 8 MB chunks × 10 threads gives us
+# parallel ranged GETs against Ceph RadosGW (Switch Engines) without paying the
+# overhead of tiny parts on the long tail of small shards.
+DEFAULT_TRANSFER_CONFIG = TransferConfig(
+    multipart_threshold=8 * 1024 * 1024,
+    multipart_chunksize=8 * 1024 * 1024,
+    max_concurrency=10,
+    use_threads=True,
+)
+
+
+def download_to_local(
+    bucket: str,
+    key: str,
+    dest: str | Path,
+    transfer_config: TransferConfig | None = None,
+) -> None:
+    """Download ``s3://bucket/key`` to a local path with multipart ranged GETs.
+
+    Uses :class:`boto3.s3.transfer.TransferConfig` so files over the threshold
+    are fetched concurrently. Raises on any failure (boto3's
+    ``Bucket.download_file`` raises on non-2xx responses by default).
+    """
+    s3r = get_s3_resource()
+    cfg = transfer_config if transfer_config is not None else DEFAULT_TRANSFER_CONFIG
+    s3r.Bucket(bucket).download_file(key, str(dest), Config=cfg)
+    log.debug("downloaded s3://%s/%s to %s", bucket, key, dest)
+
+
+def _md5_file(path: str | Path, block: int = 8 * 1024 * 1024) -> str:
+    """Stream-compute the lower-case hex MD5 of a local file.
+
+    ``usedforsecurity=False`` is required on FIPS-enabled RHEL / NGC images:
+    MD5 is used here only for S3 single-part ETag comparison, not security.
+    """
+    h = hashlib.md5(usedforsecurity=False)
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(block), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify_uploaded_object(
+    bucket: str, key: str, local_size: int, local_md5: str
+) -> tuple[str, bool]:
+    """HEAD ``s3://bucket/key`` and verify size + (single-part) ETag match.
+
+    Returns ``(etag, is_multipart)``. Raises ``RuntimeError`` on mismatch;
+    callers are expected to delete the bad object. Multipart ETags (``-N``
+    suffix) are not reconstructed — size match is the floor.
+    """
+    s3 = get_s3_client()
+    try:
+        resp = s3.head_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        raise RuntimeError(
+            f"post-upload HEAD of s3://{bucket}/{key} failed: {exc}"
+        ) from exc
+
+    remote_size = resp["ContentLength"]
+    if remote_size != local_size:
+        raise RuntimeError(
+            f"uploaded size mismatch for s3://{bucket}/{key}: "
+            f"local={local_size} remote={remote_size}"
+        )
+
+    etag = resp["ETag"].strip('"')
+    is_multipart = "-" in etag
+    if is_multipart:
+        log.debug(
+            "multipart ETag %s for s3://%s/%s; skipping bit-exact check",
+            etag,
+            bucket,
+            key,
+        )
+    elif etag.lower() != local_md5:
+        raise RuntimeError(
+            f"uploaded ETag mismatch for s3://{bucket}/{key}: "
+            f"local_md5={local_md5} remote_etag={etag}"
+        )
+    return etag, is_multipart
+
+
+def _best_effort_delete(bucket: str, key: str) -> None:
+    """Delete ``s3://bucket/key``; log and swallow any error.
+
+    Used to clean up an object that failed post-upload verification, so the
+    next run doesn't permanently skip via ``--skip-if-s3-exists``.
+    """
+    try:
+        get_s3_client().delete_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        log.warning(
+            "failed to delete corrupted upload s3://%s/%s: %s", bucket, key, exc
+        )
+
+
 def upload_local_file(local_path: str | Path, bucket: str, key: str) -> None:
-    """Upload a local file to ``s3://bucket/key``. Raises on failure."""
-    ok = upload_to_s3(str(local_path), key, bucket)
-    if not ok:
-        raise RuntimeError(f"upload to s3://{bucket}/{key} failed (see logs)")
+    """Upload a local file to ``s3://bucket/key`` and verify integrity.
+
+    Computes the local file's MD5, uploads via the transfer manager, then
+    HEADs the resulting object to confirm size matches and — for single-part
+    uploads — that the returned ETag equals the local MD5. On any mismatch
+    the uploaded object is deleted (best-effort) and a ``RuntimeError`` is
+    raised.
+    """
+    cleaned_key = key.removeprefix("s3://")
+    local_size = os.path.getsize(local_path)
+    local_md5 = _md5_file(local_path)
+
+    s3r = get_s3_resource()
+    try:
+        s3r.Bucket(bucket).upload_file(str(local_path), cleaned_key)
+    except Exception as exc:
+        raise RuntimeError(
+            f"upload to s3://{bucket}/{cleaned_key} failed: {exc}"
+        ) from exc
+
+    try:
+        etag, is_multipart = _verify_uploaded_object(
+            bucket, cleaned_key, local_size, local_md5
+        )
+    except Exception:
+        _best_effort_delete(bucket, cleaned_key)
+        raise
+
+    log.info(
+        "uploaded %s -> s3://%s/%s size=%d etag=%s multipart=%s",
+        local_path,
+        bucket,
+        cleaned_key,
+        local_size,
+        etag,
+        is_multipart,
+    )

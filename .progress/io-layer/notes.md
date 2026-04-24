@@ -1,14 +1,40 @@
 # I/O layer — decisions
 
-## What we reuse from `impresso_essentials.io.s3`
+## Why we dropped `impresso-essentials` entirely (step 12)
 
-| Use | Function | Why |
-|---|---|---|
-| S3 client/resource construction | `get_s3_client`, `get_s3_resource`, `get_bucket` | Already encapsulates host-URL and credential handling consistent with the rest of the Impresso stack. |
-| Storage options for fsspec-compatible libs | `get_storage_options` | Matches what the rest of Impresso uses. |
-| Upload (end-of-step, small hot path) | `upload_to_s3` | Correct behaviour, adequate for a single-shot upload per output file. We raise on `False` return to avoid silent drops. |
+Originally we imported `get_s3_client`, `get_s3_resource`, and `upload_to_s3`
+from `impresso_essentials.io.s3`. Building on `nvcr.io/nvidia/pytorch:25.03-py3`
+made that untenable:
 
-## What we intentionally do NOT reuse
+1. **Hardcoded pins in the package metadata.** `impresso-essentials==1.4.1`
+   declares `numpy==2.2.1`, `dask>=2024.9.0`, `pandas>=2.2.2`, `pyarrow>=17.0.0`,
+   `nltk==3.9.1`, and ~20 more. `pip install .` on the NGC image tries to
+   replace NGC's `numpy==1.26.4` with numpy 2.2.1, which breaks the apex /
+   NCCL / transformer-engine / xformers wheels (all compiled against the
+   numpy-1.x C-ABI).
+2. **`--no-deps` doesn't rescue us.** `impresso_essentials/io/s3.py` does
+   `import dask.bag as db` at module level. The module can't be imported
+   without at least `dask`, and `dask` pulls in pandas/numpy through its
+   own top-level imports (`toolz`, `cloudpickle`, `partd`) — so the `--no-deps`
+   cascade would have to include every one of those, defeating the point.
+   Notably, **none of the three helpers we use actually calls dask** — `db` is
+   only referenced by `read_s3_issues` and `fetch_files`, which we never call.
+3. **The helpers are trivial.** `get_s3_client` and `get_s3_resource` are
+   ~15 lines each of `boto3.{client,resource}("s3", ...)` driven by
+   `SE_ACCESS_KEY`/`SE_SECRET_KEY`/`SE_HOST_URL` env vars. `upload_to_s3`
+   is a 5-line `bucket.upload_file(...)`. Total: ~40 lines.
+
+**Decision:** vendor the three helpers into `src/impresso_text_embedder/io.py`,
+drop `impresso-essentials` from `pyproject.toml`, and don't install it in the
+Docker image. A build-time `assert numpy.__version__.startswith('1.26')` in the
+Dockerfile guards against any silent numpy upgrade from another source.
+
+If a future need surfaces for something else from `impresso-essentials`
+(e.g. the `versioning` manifest system), prefer a **minimal vendored snippet**
+or push upstream for a runtime-slim extras set — do **not** re-introduce the
+full package against the NGC image.
+
+## What we intentionally do NOT reuse (even before vendoring)
 
 ### `read_jsonlines` — fully loads the file into memory
 
@@ -30,9 +56,9 @@ The yearly `.jsonl.bz2` shards can be tens of MB compressed / hundreds of MB unc
 
 Instead: open the S3 body stream, wrap in `bz2.open` (which can decompress chunk-by-chunk), and iterate lines. This keeps memory bounded and lets a prefetcher run file N+1 in parallel with the encode of file N.
 
-### `upload_to_s3` — swallows exceptions, returns `bool`
+### `upload_to_s3` (upstream) — swallows exceptions, returns `bool`
 
-We still call it, but we check the return value and raise. A silent failure would leave us believing an output was persisted when it wasn't.
+Our vendored `upload_local_file` raises on failure. A silent failure would leave us believing an output was persisted when it wasn't.
 
 ### `list_providers_and_aliases` — returns providers and aliases, not per-year keys
 

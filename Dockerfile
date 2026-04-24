@@ -16,7 +16,11 @@ COPY src ./src
 
 # Install the package. NGC's bundled torch satisfies torch>=2.2 — pip will
 # leave it alone (we deliberately don't reinstall to keep CUDA/NCCL/apex
-# wheel ABI compatibility intact).
+# wheel ABI compatibility intact). impresso-essentials is intentionally NOT
+# a pyproject dep: its metadata hard-pins numpy==2.2.1 (and dask/pandas…),
+# which would uninstall NGC's numpy 1.26.4 and break the ABI stack. The
+# three S3 helpers we used from it are vendored into io.py. See
+# .progress/io-layer/notes.md.
 RUN pip install --no-cache-dir .
 
 # Hard cap transformers at 4.x. transformers>=5 changed model loading to
@@ -36,6 +40,10 @@ RUN pip install --no-cache-dir .
 RUN pip install --no-cache-dir \
       "transformers>=4.46,<5" \
       "sentence-transformers>=5.0,<5.2"
+
+# Build-time guardrail: fail the build if anything silently upgraded numpy
+# past the NGC-bundled 1.26.x (which would break apex/NCCL/TE ABI).
+RUN python -c "import numpy; assert numpy.__version__.startswith('1.26'), f'numpy was upgraded to {numpy.__version__}'"
 
 # Build-time guardrail: fail the build if the transformers cap slipped.
 RUN python -c "import transformers; v=transformers.__version__; assert v.startswith('4.'), f'transformers was upgraded to {v} — see .progress/transformers-v5-regression/notes.md'"
