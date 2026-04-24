@@ -38,7 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="only used when --embedding-level=chunk",
     )
 
-    p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="batch size for encoder.encode(); when omitted, picked per detected GPU profile",
+    )
     p.add_argument("--min-char-length", type=int, default=400)
     p.add_argument(
         "--content-type",
@@ -119,6 +124,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     _load_env()
+
+    if args.batch_size is None:
+        from impresso_text_embedder.accel import detect_profile
+
+        args.batch_size = detect_profile().default_batch_size
 
     cfg = _build_pipeline_config(args)
 

@@ -42,6 +42,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+accel = [
+    # xformers ships its own bundled FA2/FA3 kernels; on CUDA ≥ 12.3 it
+    # dispatches transparently (FA3 on Hopper, FA2 on Ampere). The NGC
+    # pytorch:25.03-py3 image already carries xformers — this extra only
+    # matters for local-dev on a non-NGC GPU host.
+    "xformers>=0.0.28",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",

@@ -48,6 +48,22 @@ RUN python -c "import numpy; assert numpy.__version__.startswith('1.26'), f'nump
 # Build-time guardrail: fail the build if the transformers cap slipped.
 RUN python -c "import transformers; v=transformers.__version__; assert v.startswith('4.'), f'transformers was upgraded to {v} — see .progress/transformers-v5-regression/notes.md'"
 
+# xformers is NOT bundled in NGC pytorch:25.03-py3 (confirmed against the
+# official component list). The Alibaba-NLP model's fast attention path
+# (`use_memory_efficient_attention=True`) calls xformers.ops, so we install
+# it from PyTorch's cu128 wheel index — which publishes builds matching the
+# container's torch 2.7 + CUDA 12.8 combination. --no-deps keeps pip from
+# reinstalling torch and breaking the apex/NCCL ABI stack.
+#
+# Note: xformers alone gives unpadding + a CUTLASS memory-efficient kernel.
+# FA2 (Ampere) / FA3 (Hopper) dispatch requires the separate `flash-attn`
+# package installed alongside; left as a follow-up, gated on measurement.
+# See .progress/gpu-profiles/notes.md.
+RUN pip install --no-cache-dir --no-deps \
+      "xformers==0.0.30" \
+      --index-url https://download.pytorch.org/whl/cu128
+RUN python -c "import xformers; print('xformers', xformers.__version__)"
+
 ENV PYTHONUNBUFFERED=1
 
 USER ${LDAP_USERNAME}

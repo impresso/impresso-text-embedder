@@ -3,7 +3,7 @@
 A thin layer over ``sentence_transformers.SentenceTransformer`` that:
   * loads with ``trust_remote_code=True`` (required by ``gte-multilingual-base``);
   * picks CUDA when available;
-  * wraps ``encode(...)`` in a bf16 autocast on CUDA (A100 tensor cores);
+  * wraps ``encode(...)`` in a bf16 autocast on CUDA (Ampere/Hopper tensor cores);
   * leaves batch size to the caller.
 
 See ``.progress/gpu-throughput/notes.md`` for the rationale.
@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
+
+from .accel import has_xformers, log_profile
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -46,13 +48,28 @@ def load_model(
     from sentence_transformers import SentenceTransformer
 
     resolved_device = device or select_device()
+    log_profile()
     log.info("Loading SentenceTransformer %s@%s on %s", name, revision or "default", resolved_device)
-    model = SentenceTransformer(
-        model_name_or_path=name,
-        trust_remote_code=True,
-        revision=revision,
-        device=resolved_device,
-    )
+
+    st_kwargs: dict[str, Any] = {
+        "model_name_or_path": name,
+        "trust_remote_code": True,
+        "revision": revision,
+        "device": resolved_device,
+    }
+    # xformers' memory_efficient_attention dispatches to FA3 on Hopper and
+    # FA2 on Ampere automatically. Alibaba's new-impl modeling file reads
+    # these flags from self.config, not __init__ kwargs — and ST v5 pre-loads
+    # the config and passes it explicitly to from_pretrained, which skips HF's
+    # kwarg-to-config routing. So they must go via config_kwargs, not
+    # model_kwargs, or NewModel.__init__ raises TypeError.
+    if resolved_device.startswith("cuda") and has_xformers():
+        st_kwargs["config_kwargs"] = {
+            "unpad_inputs": True,
+            "use_memory_efficient_attention": True,
+        }
+
+    model = SentenceTransformer(**st_kwargs)
     model.eval()
     log.info("Model loaded (device=%s)", resolved_device)
     return model

@@ -103,6 +103,13 @@ RCP_PVC          ?= dhlab-scratch
 RCP_SCRATCH_PATH ?= /rcp-scratch
 RUNAI_NODE_POOL  ?= default
 
+# Optional GPU product selector passed as `runai submit --node-type`. When
+# unset, Run:AI schedules on whatever GPU the node pool offers. Set it to
+# target a specific arch (e.g. RUNAI_GPU_TYPE=NVIDIA-H100-80GB). Exact
+# labels vary per cluster; confirm on RCP before relying on this.
+RUNAI_GPU_TYPE   ?=
+RUNAI_GPU_TYPE_ARG := $(if $(RUNAI_GPU_TYPE),--node-type $(RUNAI_GPU_TYPE),)
+
 # Per-job naming. PROVIDER must be set on the command line.
 RUNAI_JOB_NAME ?= embed-$(shell echo $(PROVIDER) | tr '[:upper:]' '[:lower:]')
 
@@ -134,6 +141,7 @@ runai-submit:
 	  --environment SE_HOST_URL=SECRET:$(K8S_SECRET_NAME),SE_HOST_URL \
 	  --environment HF_HOME=$(HF_HOME_PVC) \
 	  --node-pools $(RUNAI_NODE_POOL) \
+	  $(RUNAI_GPU_TYPE_ARG) \
 	  -- --provider $(PROVIDER) \
 	     --input-bucket $(INPUT_BUCKET) \
 	     --output-bucket $(OUTPUT_BUCKET) \
@@ -157,6 +165,7 @@ runai-interactive:
 	  --environment SE_HOST_URL=SECRET:$(K8S_SECRET_NAME),SE_HOST_URL \
 	  --environment HF_HOME=$(HF_HOME_PVC) \
 	  --node-pools $(RUNAI_NODE_POOL) \
+	  $(RUNAI_GPU_TYPE_ARG) \
 	  --command -- sleep infinity
 	@echo
 	@echo "Pod submitted. When Running:"
@@ -184,8 +193,8 @@ help:
 	@echo "    k8s-create-secret        S3 creds from .env"
 	@echo "    k8s-create-pull-secret   Harbor pull creds from .env"
 	@echo "  Run:AI:"
-	@echo "    runai-submit         PROVIDER=… INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS=…]"
-	@echo "    runai-interactive    Submit a debug pod (sleep infinity)"
+	@echo "    runai-submit         PROVIDER=… INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS=…] [RUNAI_GPU_TYPE=…]"
+	@echo "    runai-interactive    Submit a debug pod (sleep infinity) [RUNAI_GPU_TYPE=…]"
 	@echo "    runai-bash           Shell into the debug pod"
 	@echo "    runai-delete-debug   Delete the debug pod"
 	@echo
