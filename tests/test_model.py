@@ -19,14 +19,31 @@ class TestSelectDevice:
             assert model_mod.select_device() == "cpu"
 
 
+class _FakeNormalize:
+    """Stand-in for ``sentence_transformers.models.Normalize`` in tests."""
+
+
+def _patched_st_modules(fake_ctor: MagicMock) -> dict[str, MagicMock]:
+    """Sys.modules patch dict that satisfies both the ``SentenceTransformer``
+    import and the ``from sentence_transformers.models import Normalize`` lookup
+    inside :func:`load_model`'s assertion."""
+    fake_models_mod = MagicMock()
+    fake_models_mod.Normalize = _FakeNormalize
+    return {
+        "sentence_transformers": MagicMock(SentenceTransformer=fake_ctor),
+        "sentence_transformers.models": fake_models_mod,
+    }
+
+
 class TestLoadModel:
     def test_forwards_expected_args(self):
         fake_ctor = MagicMock()
         fake_instance = MagicMock()
+        fake_instance.__getitem__.return_value = _FakeNormalize()
         fake_ctor.return_value = fake_instance
 
         with (
-            patch.dict("sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=fake_ctor)}),
+            patch.dict("sys.modules", _patched_st_modules(fake_ctor)),
             patch.object(model_mod, "select_device", return_value="cpu"),
         ):
             got = model_mod.load_model(name="foo/bar", revision="abc")
@@ -42,9 +59,29 @@ class TestLoadModel:
 
     def test_honours_explicit_device(self):
         fake_ctor = MagicMock()
-        with patch.dict("sys.modules", {"sentence_transformers": MagicMock(SentenceTransformer=fake_ctor)}):
+        fake_instance = MagicMock()
+        fake_instance.__getitem__.return_value = _FakeNormalize()
+        fake_ctor.return_value = fake_instance
+        with patch.dict("sys.modules", _patched_st_modules(fake_ctor)):
             model_mod.load_model(device="cuda")
         assert fake_ctor.call_args.kwargs["device"] == "cuda"
+
+    def test_raises_when_last_module_is_not_normalize(self):
+        fake_ctor = MagicMock()
+        fake_instance = MagicMock()
+
+        class _NotNormalize:
+            pass
+
+        fake_instance.__getitem__.return_value = _NotNormalize()
+        fake_ctor.return_value = fake_instance
+
+        with (
+            patch.dict("sys.modules", _patched_st_modules(fake_ctor)),
+            patch.object(model_mod, "select_device", return_value="cpu"),
+        ):
+            with pytest.raises(RuntimeError, match="Normalize"):
+                model_mod.load_model(name="foo/bar", revision="abc")
 
 
 def _mock_model_on(device: str, output: np.ndarray) -> MagicMock:
@@ -64,7 +101,7 @@ class TestEncodeTexts:
     def test_cpu_path_forwards_kwargs(self):
         expected = np.random.rand(2, 4).astype(np.float32)
         m = _mock_model_on("cpu", expected)
-        out = model_mod.encode_texts(m, ["a", "b"], batch_size=7, normalize=False)
+        out = model_mod.encode_texts(m, ["a", "b"], batch_size=7)
         np.testing.assert_array_equal(out, expected)
         m.encode.assert_called_once()
         kwargs = m.encode.call_args.kwargs

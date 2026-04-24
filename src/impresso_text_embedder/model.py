@@ -72,8 +72,32 @@ def load_model(
 
     model = SentenceTransformer(**st_kwargs)
     model.eval()
+    _assert_built_in_normalize(model, name, revision)
     log.info("Model loaded (device=%s)", resolved_device)
     return model
+
+
+def _assert_built_in_normalize(
+    model: SentenceTransformer, name: str, revision: str | None
+) -> None:
+    """Refuse to run on a model that doesn't end with a Normalize module.
+
+    The pipeline assumes encoder outputs are unit-norm — the cosine validation
+    contract (``--tol 1e-4``) and ``MeanPoolStrategy``'s direction-only
+    averaging both depend on it. Failing at load time turns that assumption
+    into a hard invariant. See ``.progress/normalize-flag-removal/notes.md``.
+    """
+    from sentence_transformers.models import Normalize
+
+    last = model[-1]
+    if not isinstance(last, Normalize):
+        raise RuntimeError(
+            f"Model {name}@{revision or 'default'} does not end with a "
+            f"sentence_transformers.models.Normalize module "
+            f"(last module is {type(last).__name__}). The pipeline requires "
+            f"unit-norm encoder outputs; see "
+            f".progress/normalize-flag-removal/notes.md."
+        )
 
 
 @contextlib.contextmanager
@@ -90,13 +114,14 @@ def encode_texts(
     model: SentenceTransformer,
     texts: list[str],
     batch_size: int,
-    normalize: bool = True,
     show_progress_bar: bool = False,
 ) -> np.ndarray:
     """Encode ``texts`` into a numpy array of shape ``[len(texts), D]``.
 
     On CUDA, runs under bf16 autocast + ``torch.inference_mode()``. On CPU, just
-    inference_mode. Caller picks ``batch_size``.
+    inference_mode. Caller picks ``batch_size``. Output vectors are unit-norm
+    because the model is required to ship a final ``Normalize`` module
+    (asserted at load time); we do not request a redundant L2 here.
     """
     if not texts:
         return np.zeros((0, 0), dtype=np.float32)
@@ -108,7 +133,7 @@ def encode_texts(
             batch_size=batch_size,
             show_progress_bar=show_progress_bar,
             convert_to_numpy=True,
-            normalize_embeddings=normalize,
+            normalize_embeddings=False,
         )
     return _as_float32(out)
 

@@ -95,7 +95,6 @@ impresso-embed-create \
     [--batch-size N]                          # default: 64 for text, caller-visible
     [--min-char-length 400]
     [--content-type ar|page ...]              # default: ar
-    [--normalize-embeddings]                  # default: False
     [--alias <code> ...]                      # filter
     [--year-min <int>] [--year-max <int>]
     [--force]                                 # overwrite existing outputs

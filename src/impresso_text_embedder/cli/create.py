@@ -80,13 +80,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["ar", "page"],
         help="keep only records whose 'tp' field is in this allow-list",
     )
-    p.add_argument(
-        "--normalize-embeddings",
-        action="store_true",
-        default=False,
-        help="L2-normalize output vectors (no-op for models that already normalize internally)",
-    )
-
     # Long-document handling at --embedding-level=text. Partial landing:
     # only the ``chunk`` strategy with ``mean`` aggregation is wired today.
     # See .progress/long-doc-chunking/notes.md for the full design space
@@ -186,7 +179,6 @@ def _load_env() -> None:
 def _build_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
     encoder = EncoderConfig(
         batch_size=args.batch_size,
-        normalize_embeddings=args.normalize_embeddings,
         min_char_length=args.min_char_length,
         content_types=frozenset(args.content_type),
     )

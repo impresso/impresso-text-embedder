@@ -53,7 +53,6 @@ def test_build_pipeline_config_threads_encoder_fields():
             "128",
             "--min-char-length",
             "123",
-            "--normalize-embeddings",
             "--content-type",
             "ar",
             "page",
@@ -62,7 +61,6 @@ def test_build_pipeline_config_threads_encoder_fields():
     cfg = create_cli._build_pipeline_config(args)
     assert cfg.encoder.batch_size == 128
     assert cfg.encoder.min_char_length == 123
-    assert cfg.encoder.normalize_embeddings is True
     assert cfg.encoder.content_types == frozenset({"ar", "page"})
 
 

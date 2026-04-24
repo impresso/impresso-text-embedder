@@ -29,7 +29,6 @@ def _cfg(force=False, level="text"):
         force=force,
         encoder=em.EncoderConfig(
             batch_size=2,
-            normalize_embeddings=False,
             min_char_length=5,
             content_types=frozenset({"ar"}),
         ),

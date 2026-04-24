@@ -14,7 +14,6 @@ from impresso_text_embedder.chunking.base import Chunk, ChunkingStrategy
 def _cfg(**over) -> em.EncoderConfig:
     defaults = dict(
         batch_size=3,
-        normalize_embeddings=False,
         min_char_length=5,
         content_types=frozenset({"ar"}),
     )

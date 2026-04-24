@@ -13,7 +13,7 @@ Two modes in one CLI:
 
 Reasons:
 - `gte-multilingual-base` is trained for cosine similarity; this is the natural distance for these embeddings.
-- Independent of whether the user passed `--normalize-embeddings` on both sides (we normalize here regardless), so the comparison is invariant to scale.
+- Validate normalises both sides before the dot product, so the comparison is invariant to scale even if upstream ever produces non-unit vectors (today it can't — `load_model` asserts the encoder ends with a `Normalize` module; see `.progress/normalize-flag-removal/notes.md`).
 - Bounded in `[0, 2]`, so a single absolute tolerance is interpretable.
 - Robust under small rounding / bf16-vs-fp32 drift: sign-preserving, magnitude-stable.
 

@@ -154,7 +154,6 @@ class EncoderConfig:
     """Runtime config threaded through the per-record / batcher calls."""
 
     batch_size: int
-    normalize_embeddings: bool = True
     min_char_length: int = 400
     content_types: frozenset[str] = frozenset({"ar"})
     # Long-doc handling is opt-in and defaults to None; when None or
@@ -348,7 +347,6 @@ class TextBatcher:
             self._model,
             all_texts,
             batch_size=self._cfg.batch_size,
-            normalize=self._cfg.normalize_embeddings,
         )
         ts = utc_timestamp()
         out: list[TextRecord] = []
@@ -438,7 +436,6 @@ def embed_sentence_record(
         model,
         texts,
         batch_size=cfg.batch_size,
-        normalize=cfg.normalize_embeddings,
     )
 
     lg = record.get("lg")
@@ -505,7 +502,6 @@ def embed_chunk_record(
         model,
         texts,
         batch_size=cfg.batch_size,
-        normalize=cfg.normalize_embeddings,
     )
 
     lg = record.get("lg")

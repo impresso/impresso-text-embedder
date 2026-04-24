@@ -182,19 +182,12 @@ tokens → Transformer → Pooling([CLS]) → Normalize → unit vector (‖v‖
 
 The model's `modules.json` for `gte-multilingual-base` is
 `[Transformer, Pooling, Normalize]`, so every vector that comes out of
-`model.encode(...)` is already L2-unit regardless of the user flag.
-The `--normalize-embeddings` CLI flag (threaded through
-`EncoderConfig.normalize_embeddings` into
-`encode_texts(normalize=…)` → `model.encode(normalize_embeddings=…)`)
-requests an **additional** L2 pass at the end of the encode pipeline.
-On an already-unit vector this is the identity — a no-op — so the
-flag is cosmetic for this model.
-
-On a hypothetical model *without* a final `Normalize` module (a
-CLS-pooled model that ships without the third module, or a
-custom-built pipeline), the flag would matter: it would determine
-whether chunks leave the encoder unit-norm or with their raw
-post-pooling magnitudes. That distinction affects step 2 below.
+`model.encode(...)` is L2-unit. `load_model` asserts this at startup
+and refuses to run on any model that doesn't end with a `Normalize`
+module — see `.progress/normalize-flag-removal/notes.md` for why the
+old `--normalize-embeddings` CLI flag was removed and why the
+"non-normalising encoder" path is intentionally a hard failure rather
+than an auto-handled fallback.
 
 ### Step 2 — aggregate-level renormalization (inside MeanPoolStrategy)
 
@@ -241,22 +234,18 @@ always do.
 ### Practical consequence for this repo
 
 - For `gte-multilingual-base`: chunks are always unit-norm (step 1
-  is done by the model). MeanPool's step 2 renormalization
-  guarantees the aggregated document vector is also unit-norm.
-- The `--normalize-embeddings` flag is therefore effectively
-  orthogonal to the long-doc pipeline: flipping it neither
-  introduces nor removes a normalization. We keep the default
-  `False` to avoid giving the impression that it does something
-  it doesn't.
-- If we ever adopt a non-normalizing embedder, the same flag would
-  start mattering — it'd determine whether chunks reach MeanPool
-  pre-normalized or with raw magnitudes, which as shown above
-  changes the aggregation semantics.
+  is done by the model; `load_model` asserts the `Normalize` module
+  is present). MeanPool's step 2 renormalization guarantees the
+  aggregated document vector is also unit-norm.
+- A non-normalizing encoder is **not** auto-handled — `load_model`
+  refuses to start. Adding one is a deliberate change to the
+  aggregator contract (or per-aggregator invariant), not a flag
+  flip. See `.progress/normalize-flag-removal/notes.md`.
 - Do not "simplify" by folding one step into the other. The
-  aggregator must not assume chunks are unit-norm (future
-  non-normalizing model would break); the encoder must not assume
-  post-mean renormalization happens elsewhere (aggregators like
-  `first-chunk` do not renormalize a mean — they short-circuit).
+  aggregator must not assume chunks are unit-norm at the type
+  level (a future aggregator like `first-chunk` short-circuits and
+  doesn't renormalize); the encoder must not assume post-mean
+  renormalization happens elsewhere.
 
 ## Problem (pre-implementation framing; kept for context)
 

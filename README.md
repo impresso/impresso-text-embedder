@@ -38,7 +38,7 @@ uv run impresso-embed-create \
 
 Useful flags: `--embedding-level {text,sentence,chunk}`, `--model-revision`,
 `--alias EXP GDL --year-min 1910 --year-max 1920`, `--force`, `--dry-run`,
-`--normalize-embeddings`, `--min-char-length 400`.
+`--min-char-length 400`.
 
 `--help` lists everything.
 
