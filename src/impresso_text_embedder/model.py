@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL_NAME = "Alibaba-NLP/gte-multilingual-base"
+DEFAULT_MODEL_REVISION = "f7d567e"
 
 
 def select_device() -> str:
@@ -36,7 +37,7 @@ def select_device() -> str:
 
 def load_model(
     name: str = DEFAULT_MODEL_NAME,
-    revision: str | None = None,
+    revision: str | None = DEFAULT_MODEL_REVISION,
     device: str | None = None,
 ) -> SentenceTransformer:
     """Load a SentenceTransformer model pinned to ``revision`` (if given).
