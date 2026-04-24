@@ -16,13 +16,13 @@ def _write(path: Path, records: list[dict]) -> None:
             fh.write("\n")
 
 
-def _text(id_: str, emb: list[float]) -> dict:
+def _text(ci_id: str, emb: list[float]) -> dict:
     return {
-        "id": id_,
-        "ts": "2024-01-02T03:04:05Z",
-        "embedder": "m@default",
-        "len": 1,
+        "ci_id": ci_id,
+        "model_id": "m@default",
         "embedding": emb,
+        "size": len(emb),
+        "ts": "2024-01-02T03:04:05Z",
     }
 
 

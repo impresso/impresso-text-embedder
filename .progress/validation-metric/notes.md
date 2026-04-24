@@ -46,5 +46,5 @@ If a record exists in one file but not the other, it's reported as a mismatch, n
 
 - **Fuzzy id matching.** Ids must match exactly.
 - **Re-ordering tolerance.** We build by-id maps on both sides before comparing, so record *order* in the two files is irrelevant. But items inside a record (sentences, chunks) use the sent_id / chunk_id as the match key.
-- **Text content equality.** We only compare vectors; even if `include_text` is set on both sides, we don't diff the text.
+- **Text content equality.** We only compare vectors; raw source text is not part of the output schema, so there's nothing to diff.
 - **Cross-level comparison.** Comparing a text-level output to a sentence-level output is meaningless and unsupported.

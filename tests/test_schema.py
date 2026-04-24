@@ -20,27 +20,37 @@ class TestUtcTimestamp:
 class TestTextRecord:
     def test_round_and_drop_none(self):
         r = TextRecord(
-            id="ci-1",
-            ts="2024-01-02T03:04:05Z",
-            embedder="foo@bar",
-            len=42,
+            ci_id="ci-1",
+            model_id="foo@bar",
             embedding=[0.123456789, -0.987654321, 0.0],
+            size=3,
+            ts="2024-01-02T03:04:05Z",
         )
         d = r.to_dict()
         assert d == {
-            "id": "ci-1",
-            "ts": "2024-01-02T03:04:05Z",
-            "embedder": "foo@bar",
-            "len": 42,
+            "ci_id": "ci-1",
+            "model_id": "foo@bar",
             "embedding": [0.12346, -0.98765, 0.0],
+            "size": 3,
+            "ts": "2024-01-02T03:04:05Z",
         }
-        assert "text" not in d  # None dropped
+        assert "ci_type" not in d  # None dropped
         # round-trip through json
         assert json.loads(json.dumps(d)) == d
 
-    def test_includes_text_when_set(self):
-        r = TextRecord(id="x", ts="t", embedder="e", len=1, embedding=[0.1], text="hi")
-        assert r.to_dict()["text"] == "hi"
+    def test_ts_and_ci_type_optional(self):
+        r = TextRecord(
+            ci_id="x", model_id="e", embedding=[0.1], size=1
+        )
+        d = r.to_dict()
+        assert "ts" not in d
+        assert "ci_type" not in d
+
+    def test_ci_type_included_when_set(self):
+        r = TextRecord(
+            ci_id="x", model_id="e", embedding=[0.1], size=1, ci_type="ar"
+        )
+        assert r.to_dict()["ci_type"] == "ar"
 
 
 class TestSentenceRecord:

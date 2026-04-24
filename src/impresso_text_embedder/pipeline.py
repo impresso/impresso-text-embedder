@@ -23,9 +23,18 @@ log = logging.getLogger(__name__)
 
 DEFAULT_MODEL_SLUG_PREFIX_TO_STRIP = "Alibaba-NLP/"
 
+# Impresso-convention slugs for models we ship with. Used as the
+# ``<model-slug>`` segment of the output S3 key. Unknown models fall back to
+# stripping the HF vendor prefix (or the last path component).
+MODEL_SLUG_OVERRIDES: dict[str, str] = {
+    "Alibaba-NLP/gte-multilingual-base": "embeddings_gte_v1-1-0",
+}
+
 
 def model_slug(model_name: str) -> str:
-    """Strip the vendor prefix for the S3 output path."""
+    """Return the Impresso-convention slug for the S3 output path."""
+    if model_name in MODEL_SLUG_OVERRIDES:
+        return MODEL_SLUG_OVERRIDES[model_name]
     if model_name.startswith(DEFAULT_MODEL_SLUG_PREFIX_TO_STRIP):
         return model_name[len(DEFAULT_MODEL_SLUG_PREFIX_TO_STRIP) :]
     return model_name.split("/")[-1]

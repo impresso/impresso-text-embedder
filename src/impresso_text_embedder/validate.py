@@ -140,7 +140,7 @@ def validate_structural(path: str | Path) -> ValidationReport:
 
 
 def _check_text_record(rec, index, report, *, expected_dim):
-    for req in ("id", "embedding"):
+    for req in ("ci_id", "model_id", "embedding", "size"):
         if req not in rec:
             report.errors.append(f"record {index}: text record missing {req!r}")
             return expected_dim
@@ -150,6 +150,11 @@ def _check_text_record(rec, index, report, *, expected_dim):
         return expected_dim
     if not _finite(emb):
         report.errors.append(f"record {index}: embedding has non-finite values")
+    size = rec["size"]
+    if not isinstance(size, int) or size != len(emb):
+        report.errors.append(
+            f"record {index}: size {size!r} != len(embedding) {len(emb)}"
+        )
     if expected_dim is None:
         expected_dim = len(emb)
     elif len(emb) != expected_dim:
@@ -217,7 +222,7 @@ def _cosine_distance(a: list[float], b: list[float]) -> float:
 
 
 def _index_text(records: Iterable[dict]) -> dict[str, dict]:
-    return {r["id"]: r for r in records if "id" in r}
+    return {r["ci_id"]: r for r in records if "ci_id" in r}
 
 
 def _index_items(records: Iterable[dict], list_key: str, id_key: str) -> dict[tuple[str, int], dict]:
@@ -279,14 +284,14 @@ def _compare_text(produced, expected, tol, report):
     all_ids = set(p_idx) | set(e_idx)
     for rid in sorted(all_ids):
         if rid not in p_idx:
-            report.mismatches.append(f"missing in produced: id={rid!r}")
+            report.mismatches.append(f"missing in produced: ci_id={rid!r}")
             continue
         if rid not in e_idx:
-            report.mismatches.append(f"missing in target: id={rid!r}")
+            report.mismatches.append(f"missing in target: ci_id={rid!r}")
             continue
         d = _cosine_distance(p_idx[rid]["embedding"], e_idx[rid]["embedding"])
         if d > tol:
-            report.mismatches.append(f"id={rid!r}: cosine distance {d:.3e} > tol {tol:.0e}")
+            report.mismatches.append(f"ci_id={rid!r}: cosine distance {d:.3e} > tol {tol:.0e}")
         report.max_distance = max(report.max_distance, d)
         report.records_checked += 1
         report.items_checked += 1

@@ -1,9 +1,11 @@
 """Output schemas for the three embedding levels (text, sentence, chunk).
 
-Mirrors the shapes emitted by ``main:lib/text_embedding_processor.py``. Float values
-in embeddings are rounded to 5 decimals on serialization (legacy behaviour). Optional
-fields with ``None`` are omitted from the output so the JSONL lines don't carry
-null keys.
+Text-level shape follows the authoritative Impresso document-embeddings JSON
+schema (``embeddings-docs.schema.json``). Sentence- and chunk-level shapes
+mirror what ``main:lib/text_embedding_processor.py`` produced and are not yet
+re-verified against authoritative schemas. Float values in embeddings are
+rounded to 5 decimals on serialization. Optional fields with ``None`` are
+omitted from the output so the JSONL lines don't carry null keys.
 """
 
 from __future__ import annotations
@@ -35,14 +37,19 @@ def _drop_none(d: dict[str, Any]) -> dict[str, Any]:
 
 @dataclass
 class TextRecord:
-    """One embedding per content item. Written as a flat JSON line."""
+    """One embedding per content item. Written as a flat JSON line.
 
-    id: str
-    ts: str
-    embedder: str
-    len: int
+    Field names follow the Impresso document-embeddings schema
+    (``embeddings-docs.schema.json``): required ``ci_id``, ``model_id``,
+    ``embedding``, ``size``; optional ``ts`` (RFC3339) and ``ci_type``.
+    """
+
+    ci_id: str
+    model_id: str
     embedding: list[float]
-    text: str | None = None
+    size: int
+    ts: str | None = None
+    ci_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
