@@ -29,3 +29,6 @@ hf.d/
 
 # Old scratch dirs from pre-migration layout
 build.d/
+
+# Local scratch (ad-hoc downloads, sample outputs)
+tmp/
