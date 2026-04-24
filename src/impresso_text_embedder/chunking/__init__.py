@@ -20,7 +20,21 @@ def _make_semantic() -> ChunkingStrategy:
     return SemanticStrategy()
 
 
+def _make_token_budget(**kwargs: object) -> ChunkingStrategy:
+    from impresso_text_embedder.chunking.token_budget import TokenBudgetStrategy
+
+    return TokenBudgetStrategy(**kwargs)  # type: ignore[arg-type]
+
+
+def _make_fixed_window(**kwargs: object) -> ChunkingStrategy:
+    from impresso_text_embedder.chunking.fixed_window import FixedWindowStrategy
+
+    return FixedWindowStrategy(**kwargs)  # type: ignore[arg-type]
+
+
 register_strategy("semantic", _make_semantic)
+register_strategy("token-budget", _make_token_budget)
+register_strategy("fixed-window", _make_fixed_window)
 
 
 __all__ = [

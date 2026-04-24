@@ -10,13 +10,14 @@ See ``.progress/validation-metric/notes.md`` for the metric choice.
 from __future__ import annotations
 
 import bz2
-import json
 import logging
 import math
 import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import orjson
 
 from impresso_text_embedder import io as s3io
 
@@ -78,8 +79,8 @@ def detect_level(record: dict) -> str:
 def parse_records(lines: Iterable[str]) -> Iterator[dict]:
     for i, line in enumerate(lines, start=1):
         try:
-            yield json.loads(line)
-        except json.JSONDecodeError as exc:
+            yield orjson.loads(line)
+        except orjson.JSONDecodeError as exc:
             raise ValueError(f"line {i}: malformed JSON ({exc})") from exc
 
 

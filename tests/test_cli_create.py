@@ -5,32 +5,37 @@ from unittest.mock import MagicMock, patch
 from impresso_text_embedder.cli import create as create_cli
 
 
-def test_parser_requires_provider_and_buckets():
+def test_parser_requires_provider():
     parser = create_cli.build_parser()
-    # Missing everything
     import pytest
 
+    # --provider is the only required flag; buckets fall back to defaults.
     with pytest.raises(SystemExit):
         parser.parse_args([])
-    # Only provider — still missing buckets
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--provider", "SNL"])
+
+
+def test_parser_bucket_defaults():
+    """Buckets have defaults pointing at the Impresso S3 workspace.
+
+    Confirms both the default values and that the flags still accept overrides.
+    """
+    default = create_cli.build_parser().parse_args(["--provider", "SNL"])
+    assert default.input_bucket == "122-rebuilt-final"
+    assert default.output_bucket == "140-processed-data-sandbox"
+
+    overrides = create_cli.build_parser().parse_args(
+        ["--provider", "SNL", "--input-bucket", "i", "--output-bucket", "o"]
+    )
+    assert overrides.input_bucket == "i"
+    assert overrides.output_bucket == "o"
 
 
 def test_parser_accepts_minimum_args():
-    args = create_cli.build_parser().parse_args(
-        [
-            "--provider",
-            "SNL",
-            "--input-bucket",
-            "i",
-            "--output-bucket",
-            "o",
-        ]
-    )
+    args = create_cli.build_parser().parse_args(["--provider", "SNL"])
     assert args.provider == "SNL"
     assert args.embedding_level == "text"
-    assert args.batch_size == 64
+    # Parser default is None; main() resolves it from accel.detect_profile().
+    assert args.batch_size is None
     assert args.content_type == ["ar"]
     assert args.chunking_strategy == "semantic"
 
@@ -48,7 +53,6 @@ def test_build_pipeline_config_threads_encoder_fields():
             "128",
             "--min-char-length",
             "123",
-            "--include-text",
             "--normalize-embeddings",
             "--content-type",
             "ar",
@@ -58,7 +62,6 @@ def test_build_pipeline_config_threads_encoder_fields():
     cfg = create_cli._build_pipeline_config(args)
     assert cfg.encoder.batch_size == 128
     assert cfg.encoder.min_char_length == 123
-    assert cfg.encoder.include_text is True
     assert cfg.encoder.normalize_embeddings is True
     assert cfg.encoder.content_types == frozenset({"ar", "page"})
 
@@ -86,6 +89,61 @@ def test_main_dry_run_skips_model_load():
     assert pp.call_args.kwargs["model"] is None
 
 
+def test_parser_accepts_limit():
+    default = create_cli.build_parser().parse_args(
+        ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o"]
+    )
+    assert default.limit is None
+
+    with_limit = create_cli.build_parser().parse_args(
+        ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o", "--limit", "3"]
+    )
+    assert with_limit.limit == 3
+
+
+def test_main_threads_limit_through_to_process_provider():
+    with (
+        patch.object(create_cli, "process_provider", return_value={"processed": 0, "skipped": 0, "files": []}) as pp,
+        patch.object(create_cli, "_load_env"),
+    ):
+        rc = create_cli.main(
+            [
+                "--provider",
+                "P",
+                "--input-bucket",
+                "i",
+                "--output-bucket",
+                "o",
+                "--limit",
+                "2",
+                "--dry-run",
+            ]
+        )
+    assert rc == 0
+    assert pp.call_args.kwargs["limit"] == 2
+
+
+def test_main_rejects_negative_limit(capsys):
+    import pytest
+
+    with pytest.raises(SystemExit):
+        create_cli.main(
+            [
+                "--provider",
+                "P",
+                "--input-bucket",
+                "i",
+                "--output-bucket",
+                "o",
+                "--limit",
+                "-1",
+                "--dry-run",
+            ]
+        )
+    err = capsys.readouterr().err
+    assert "--limit must be >= 0" in err
+
+
 def test_main_non_dry_run_loads_model():
     fake_model = MagicMock()
     with (
@@ -104,5 +162,206 @@ def test_main_non_dry_run_loads_model():
             ]
         )
     assert rc == 0
-    lm.assert_called_once_with(name="Alibaba-NLP/gte-multilingual-base", revision=None)
+    lm.assert_called_once_with(name="Alibaba-NLP/gte-multilingual-base", revision="f7d567e")
     assert pp.call_args.kwargs["model"] is fake_model
+
+
+def test_parser_pins_model_revision_by_default():
+    args = create_cli.build_parser().parse_args(
+        ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o"]
+    )
+    assert args.model_name == "Alibaba-NLP/gte-multilingual-base"
+    assert args.model_revision == "f7d567e"
+
+
+def test_parser_long_doc_flags_default_and_override():
+    default = create_cli.build_parser().parse_args(
+        ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o"]
+    )
+    # Default is 'chunk' (long docs go through the detect/chunk/aggregate
+    # path); 'truncate' is the opt-out for reproducing pre-step-16 outputs.
+    # chunk_tokens default is None — auto-derived from the loaded model's
+    # tokenizer at CLI-init time (model_max_length - num_special_tokens_to_add).
+    assert default.long_doc_strategy == "chunk"
+    assert default.long_doc_chunk_tokens is None
+    assert default.long_doc_aggregation == "mean"
+
+    overrides = create_cli.build_parser().parse_args(
+        [
+            "--provider",
+            "P",
+            "--input-bucket",
+            "i",
+            "--output-bucket",
+            "o",
+            "--long-doc-strategy",
+            "truncate",
+            "--long-doc-chunk-tokens",
+            "2048",
+            "--long-doc-aggregation",
+            "mean",
+        ]
+    )
+    assert overrides.long_doc_strategy == "truncate"
+    assert overrides.long_doc_chunk_tokens == 2048
+    assert overrides.long_doc_aggregation == "mean"
+
+
+def test_resolve_chunk_tokens_precedence():
+    """CLI explicit value > tokenizer-derived > hard-coded fallback."""
+
+    class _Tok:
+        model_max_length = 4096
+
+        def num_special_tokens_to_add(self, pair: bool = False) -> int:
+            return 2
+
+    tok = _Tok()
+    # Explicit CLI value wins regardless of tokenizer.
+    assert create_cli._resolve_chunk_tokens(1234, tok) == 1234
+    # None → derive from tokenizer: 4096 - 2 = 4094.
+    assert create_cli._resolve_chunk_tokens(None, tok) == 4094
+    # Tokenizer missing the attributes → hard-coded fallback.
+    assert (
+        create_cli._resolve_chunk_tokens(None, object())
+        == create_cli._FALLBACK_CHUNK_TOKENS
+    )
+
+
+def test_parser_rejects_unknown_long_doc_aggregation():
+    import pytest
+
+    # Only 'mean' is implemented today; additional choices are added as they
+    # ship. argparse should reject anything else.
+    with pytest.raises(SystemExit):
+        create_cli.build_parser().parse_args(
+            [
+                "--provider",
+                "P",
+                "--input-bucket",
+                "i",
+                "--output-bucket",
+                "o",
+                "--long-doc-aggregation",
+                "max",
+            ]
+        )
+
+
+def test_dry_run_does_not_build_long_doc_config():
+    """_build_long_doc_config needs a model; dry-run has none.
+
+    The CLI must skip the long-doc wiring entirely in dry-run mode, even
+    when ``--long-doc-strategy=chunk`` is passed (no crash, no tokenizer
+    access).
+    """
+    with (
+        patch.object(
+            create_cli,
+            "process_provider",
+            return_value={"processed": 0, "skipped": 0, "files": []},
+        ),
+        patch.object(create_cli, "_load_env"),
+        patch.object(
+            create_cli, "_build_long_doc_config", side_effect=AssertionError("must not call")
+        ) as bldc,
+    ):
+        rc = create_cli.main(
+            [
+                "--provider",
+                "P",
+                "--input-bucket",
+                "i",
+                "--output-bucket",
+                "o",
+                "--long-doc-strategy",
+                "chunk",
+                "--dry-run",
+            ]
+        )
+    assert rc == 0
+    bldc.assert_not_called()
+
+
+def test_long_doc_chunk_wires_encoder_config():
+    """``--long-doc-strategy=chunk`` attaches a LongDocConfig to the encoder."""
+    from impresso_text_embedder.embed import LongDocConfig
+
+    fake_model = MagicMock()
+    captured = {}
+
+    def _capture(args, model):
+        # Record the call and return a real LongDocConfig so the rest of
+        # the CLI path works.
+        captured["args"] = args
+        captured["model"] = model
+        return LongDocConfig(
+            strategy="chunk",
+            chunker=MagicMock(),
+            aggregator=MagicMock(),
+            model_max_tokens=8192,
+            token_counter=lambda t: 0,
+        )
+
+    with (
+        patch.object(
+            create_cli,
+            "process_provider",
+            return_value={"processed": 1, "skipped": 0, "files": ["k"]},
+        ) as pp,
+        patch.object(create_cli, "_load_env"),
+        patch(
+            "impresso_text_embedder.model.load_model", return_value=fake_model
+        ),
+        patch.object(create_cli, "_build_long_doc_config", side_effect=_capture),
+    ):
+        rc = create_cli.main(
+            [
+                "--provider",
+                "P",
+                "--input-bucket",
+                "i",
+                "--output-bucket",
+                "o",
+                "--long-doc-strategy",
+                "chunk",
+                "--long-doc-chunk-tokens",
+                "2048",
+            ]
+        )
+    assert rc == 0
+    # _build_long_doc_config received the parsed args and the loaded model.
+    assert captured["model"] is fake_model
+    assert captured["args"].long_doc_chunk_tokens == 2048
+    # The wired encoder now carries a LongDocConfig.
+    cfg = pp.call_args.kwargs["cfg"]
+    assert cfg.encoder.long_doc is not None
+    assert cfg.encoder.long_doc.strategy == "chunk"
+
+
+def test_parser_log_flags_default_and_override(tmp_path):
+    # Defaults: log-dir=None (resolve-time default), log-level-file=INFO.
+    default = create_cli.build_parser().parse_args(
+        ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o"]
+    )
+    assert default.log_dir is None
+    assert default.log_level_file == "INFO"
+
+    overrides = create_cli.build_parser().parse_args(
+        [
+            "--provider",
+            "P",
+            "--input-bucket",
+            "i",
+            "--output-bucket",
+            "o",
+            "--log-dir",
+            str(tmp_path),
+            "--log-level-file",
+            "DEBUG",
+        ]
+    )
+    assert overrides.log_dir == tmp_path
+    assert overrides.log_level_file == "DEBUG"
+
+

@@ -70,6 +70,11 @@ def fake_world(tmp_path, monkeypatch):
                 if line:
                     yield line
 
+    def fake_download_to_local(bucket, key, dest, transfer_config=None):
+        src = input_root / key
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        Path(dest).write_bytes(src.read_bytes())
+
     def fake_list_input_keys(bucket, provider, input_prefix="", **_):
         # Walk the fake input root and return InputKey objects with real mtimes.
         provider_dir = input_root / provider
@@ -96,10 +101,10 @@ def fake_world(tmp_path, monkeypatch):
         return _mtime(dest)
 
     monkeypatch.setattr(s3io, "iter_jsonl_bz2", fake_iter_jsonl_bz2)
+    monkeypatch.setattr(s3io, "download_to_local", fake_download_to_local)
     monkeypatch.setattr(s3io, "list_input_keys", fake_list_input_keys)
     monkeypatch.setattr(s3io, "upload_local_file", fake_upload)
     monkeypatch.setattr(s3io, "head_last_modified", fake_head_last_modified)
-    # pipeline.iter_input_lines goes through s3io.iter_jsonl_bz2 already.
 
     # Deterministic fake encoder: derive embedding from text length modulo.
     def fake_encode(model, texts, **_):
@@ -142,18 +147,20 @@ def test_create_then_validate_roundtrip(fake_world, capsys):
 
     uploaded = fake_world["uploaded"]
     assert set(uploaded) == {
-        "embeddings/docs/gte-multilingual-base/SNL/EXP/EXP-1910.jsonl.bz2",
-        "embeddings/docs/gte-multilingual-base/SNL/EXP/EXP-1911.jsonl.bz2",
+        "embeddings/docs/embeddings_gte_v1-1-0/SNL/EXP/EXP-1910.jsonl.bz2",
+        "embeddings/docs/embeddings_gte_v1-1-0/SNL/EXP/EXP-1911.jsonl.bz2",
     }
 
     # Inspect one output file.
-    key = "embeddings/docs/gte-multilingual-base/SNL/EXP/EXP-1910.jsonl.bz2"
+    key = "embeddings/docs/embeddings_gte_v1-1-0/SNL/EXP/EXP-1910.jsonl.bz2"
     lines = bz2.decompress(uploaded[key]).decode("utf-8").splitlines()
     records = [json.loads(line) for line in lines]
-    assert [r["id"] for r in records] == ["ci-1910-0", "ci-1910-1", "ci-1910-2"]
+    assert [r["ci_id"] for r in records] == ["ci-1910-0", "ci-1910-1", "ci-1910-2"]
     for r in records:
-        assert r["embedder"] == "Alibaba-NLP/gte-multilingual-base@default"
+        assert r["model_id"] == "Alibaba-NLP/gte-multilingual-base@f7d567e"
         assert isinstance(r["embedding"], list) and len(r["embedding"]) == 3
+        assert r["size"] == len(r["embedding"])
+        assert r["ci_type"] == "ar"
 
     # Validate (structural + self-comparison) via the validate CLI.
     out_path = fake_world["output_root"] / key
@@ -241,7 +248,7 @@ def test_reembeds_when_input_is_newer(fake_world):
     output_root: Path = fake_world["output_root"]
     target_input = input_root / "SNL/EXP/EXP-1910.jsonl.bz2"
     target_output = (
-        output_root / "embeddings/docs/gte-multilingual-base/SNL/EXP/EXP-1910.jsonl.bz2"
+        output_root / "embeddings/docs/embeddings_gte_v1-1-0/SNL/EXP/EXP-1910.jsonl.bz2"
     )
     new_mtime = target_output.stat().st_mtime + 10
     os.utime(target_input, (new_mtime, new_mtime))
@@ -258,7 +265,7 @@ def test_reembeds_when_input_is_newer(fake_world):
 
     # Only the touched file should have been re-embedded.
     assert reuploaded == [
-        "embeddings/docs/gte-multilingual-base/SNL/EXP/EXP-1910.jsonl.bz2"
+        "embeddings/docs/embeddings_gte_v1-1-0/SNL/EXP/EXP-1910.jsonl.bz2"
     ]
 
 

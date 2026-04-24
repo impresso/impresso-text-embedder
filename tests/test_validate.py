@@ -83,11 +83,14 @@ class TestStructural:
         assert any("dim" in e for e in r.errors)
 
     def test_catches_nan(self, tmp_path):
+        # orjson is strict RFC 8259 and rejects bare ``NaN`` at parse time, so
+        # a NaN in the file surfaces as a malformed-JSON error rather than as
+        # a non-finite-embedding error. Either way the file is flagged.
         p = tmp_path / "e.jsonl.bz2"
         _write_jsonl_bz2(p, [_text_record("a", [float("nan"), 0.0])])
         r = v.validate_structural(p)
         assert not r.passed
-        assert any("non-finite" in e for e in r.errors)
+        assert r.errors
 
     def test_catches_bad_timestamp(self, tmp_path):
         p = tmp_path / "e.jsonl.bz2"

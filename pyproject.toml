@@ -39,6 +39,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "tqdm>=4.66",
     "chonkie>=0.2",
+    "orjson>=3.10",
 ]
 
 [project.optional-dependencies]
