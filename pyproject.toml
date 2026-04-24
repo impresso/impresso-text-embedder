@@ -40,6 +40,7 @@ dependencies = [
     "tqdm>=4.66",
     "chonkie>=0.2",
     "orjson>=3.10",
+    "rich>=13",
 ]
 
 [project.optional-dependencies]

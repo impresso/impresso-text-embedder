@@ -48,3 +48,28 @@ If a record exists in one file but not the other, it's reported as a mismatch, n
 - **Re-ordering tolerance.** We build by-id maps on both sides before comparing, so record *order* in the two files is irrelevant. But items inside a record (sentences, chunks) use the sent_id / chunk_id as the match key.
 - **Text content equality.** We only compare vectors; raw source text is not part of the output schema, so there's nothing to diff.
 - **Cross-level comparison.** Comparing a text-level output to a sentence-level output is meaningless and unsupported.
+
+## Terminal output
+
+The CLI emits a statistical summary rather than a flat list of mismatches. Motivation: on real runs (e.g. GDL-1798, 447 mismatches across two kinds) the old "first 20 + `... and N more`" format hid signal — you couldn't tell from the output how bad the drifts were or whether the tail was missing-records or value drift.
+
+Sections, printed only when the data exists:
+
+- **Header** — `produced → target` (or just the path for structural runs).
+- **Counts table** — records / items checked, level, tolerance, max distance. The old single-line `records_checked=… items_checked=… max_distance=…` is still emitted first for log-grep compatibility.
+- **Mismatch breakdown** — counts by kind: above tolerance, missing in target, missing in produced, passing. Percentages are over `compared + missing_target + missing_produced`.
+- **Distance percentiles** — `min / p50 / p90 / p99 / max` over every compared pair (missing records are excluded; they don't have a distance). Plus count above tolerance.
+- **Log-scale histogram** — base-10 bins from `<= -7` up to `-1 .. 0`. A `← tol=…` marker sits on the bin that contains the tolerance so the failure threshold is visually obvious.
+- **Worst drifts** — top-N value mismatches sorted by distance (default `--top 10`). A single `MISMATCH: …` line follows the table to preserve the grep contract.
+- **Missing summary** — count plus either the full list (with `--show-all-missing`) or first few + `(+N more)`. This collapses what used to be hundreds of enumerated lines.
+- **Verdict** — `OK` / `OK: all records within tol` / `FAIL`. Exit code unchanged (0 / 1).
+
+Data-layer changes backing the renderer live in `validate.py`:
+
+- `ValidationReport.mismatches` is `list[Mismatch]` (structured), not `list[str]`. `Mismatch.__str__` preserves the old substrings (`"cosine distance"`, `"missing in target"`, `"missing in produced"`, `"ci_id=…"`, `"sent_id=…"`) so log parsers and `"… in m"` assertions keep working.
+- `ValidationReport.distances: list[float]` collects every cosine distance computed (passing + failing), which is what percentile and histogram need.
+- `ValidationReport.level` records the detected level for the counts table.
+
+New CLI flags: `--top N` (default 10), `--show-all-missing`. No color is emitted — decision was to stay plain text so piping and CI logs render identically to the terminal (no `rich` dep, no ANSI escapes). Reconsider only if a TTY-only enhancement earns its keep.
+
+Tests locked in: substring assertions (`"cosine distance" in str(m)`, `"records_checked="`, `MISMATCH:`, `OK`, `FAIL`, and presence of `p50=`/`log10(distance)`/`worst drifts`/`mismatches`). The layout can be tweaked further as long as those stay.

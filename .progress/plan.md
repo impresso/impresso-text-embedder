@@ -20,6 +20,7 @@ Living step list. Statuses: `todo` / `wip` / `done` / `deferred`. Slug names are
 | 14 | model-revision-pin | done | `.progress/model-revision-pin/` |
 | 15 | structured-logging | done | `.progress/structured-logging/` |
 | 16 | long-doc-chunking | partial | `.progress/long-doc-chunking/` |
+| 17 | validate-source-stats | done | `.progress/validate-source-stats/` |
 
 ## Step details
 
@@ -342,3 +343,108 @@ Rationale, full strategy catalogue, rejected alternatives (Late
 Chunking as a long-doc solution, paragraph-based packer, recursive
 splitter via LangChain, hierarchical re-encoder), and the expected
 Impresso-specific trade-offs in `.progress/long-doc-chunking/notes.md`.
+
+### 17. validate-source-stats
+Extend `impresso-embed-validate` with (a) source-backed statistics on
+the records that show up in the "missing in target" / "missing in
+produced" buckets, and (b) a Rich-rendered output across all validate
+stats. Both are diagnostic improvements; `ValidationReport.passed` and
+exit codes are unchanged. Reverses the step-7 decision to stay plain
+text — Rich auto-detects TTY and strips ANSI when piped, so the
+substring contracts the step-7 tests locked in keep passing unchanged.
+
+Deliverables:
+- `src/impresso_text_embedder/validate.py`: `SourceStatsBlock`,
+  `SourceStatsAnalysis`, `collect_source_stats(source_path, report,
+  min_char_length=400) -> SourceStatsAnalysis`. Reconstructs text via
+  `ft` if present, else `text.rebuild_ft_from_offsets(sents)`, else
+  empty string. Matches `source["id"] == mismatch.ci_id` (the input
+  schema uses `id`; the embedding schema uses `ci_id`).
+  `ValidationReport` gains one optional `source_stats` field.
+- `src/impresso_text_embedder/cli/validate.py`: `--source <path>`
+  (same path semantics as `--target` — local or `s3://`) and
+  `--source-min-char-length N` (default 400, matches
+  `impresso-embed-create`'s default). Rendering switches to
+  `rich.console.Console` + `Table` + `Panel`. Legacy substring markers
+  (`records_checked=`, `MISMATCH:`, `missing in target (N)`, `p50=`,
+  `log10(distance)`, `worst drifts`, `mismatches`, `OK`, `FAIL`) kept
+  as plain `console.print(..., highlight=False)` lines. Structural-only
+  runs with `--source` emit a WARNING on stderr and otherwise
+  ignore the source.
+- `pyproject.toml`: add `rich>=13` to runtime deps.
+- Tests: every existing substring assertion passes unchanged
+  (pytest's `capsys` is non-TTY, so Rich auto-strips ANSI). New tests:
+  (a) `--source` populates `source_stats` with correct per-block
+  counts for both directions; (b) records present in produced/target
+  but absent from source tally into `not_in_source_ids`; (c) char-length
+  percentiles + `lg` / `tp` bucketing (including `(missing)` bucket);
+  (d) `--source` without `--target` emits warning and no panel;
+  (e) Rich Panel / Table presence via substring
+  assertions on headings (`"missing in target"`, `"length histogram"`,
+  `"samples"`).
+- `CLAUDE.md`: add `--source` under the validate CLI and a
+  "Decisions recorded" bullet summarising the Rich switch + the
+  source-stats feature.
+
+Rationale, stats catalogue, rejected alternatives (token-accurate
+length, JSON sidecar, replaying the full filter predicate, separate
+`impresso-embed-explain` CLI), and open items (histogram edges,
+sample count) in `.progress/validate-source-stats/notes.md`.
+
+**Part 2 — above-tolerance source stats (shipped).**
+Extends the Part-1 dataflow with a third direction block keyed by
+`MismatchKind.VALUE`. Same `SourceStatsBlock` shape — the new panel
+reuses the existing counts / histogram / lg / tp / samples rendering
+for free.
+
+Shipped deliverables:
+- `SourceStatsBlock` populated for `MismatchKind.VALUE` ids with the
+  same fields as the missing directions. Record-granularity
+  aggregation collapses K item-level mismatches for one `ci_id` into
+  a single source lookup, with the **max cosine distance** across its
+  items tracked via `_value_distance_per_record(mismatches)`.
+- New `Sample(ci_id, excerpt, distance: float | None)` dataclass
+  replaces the `tuple[str, str]` sample shape. `distance` stays
+  `None` for missing directions, populated for VALUE from
+  `_value_distance_per_record`.
+- Drift-aware sampling: VALUE candidates buffer through the streaming
+  scan, then sort by distance desc at finalise; the top
+  `sample_count` (default 3) land on the panel. Missing-direction
+  sampling keeps "first N seen" semantics.
+- Rich renderer: new `source analysis — above tolerance (N records)`
+  panel with `border_style="red"`, rendered first in
+  `_emit_source_stats` (ahead of the two yellow missing panels).
+  Per-sample line formatted by `_format_sample_line` — emits
+  `  {ci_id}  d={dist:.2e}  {excerpt!r}` when `distance` is set,
+  `  {ci_id}  {excerpt!r}` otherwise.
+- Renamed `_missing_ids_by_direction` → `_target_ids_by_direction`
+  and extended `_SOURCE_DIRECTIONS` to include `VALUE` so the single
+  streaming scan handles all three buckets.
+- New tests in `tests/test_validate.py::TestSourceStatsValueDirection`:
+  `test_value_direction_populated`,
+  `test_value_samples_ordered_by_worst_drift`,
+  `test_value_items_collapse_to_record_max_distance`,
+  `test_value_block_empty_when_no_drift`,
+  `test_value_distances_helper_returns_max_per_record`. The existing
+  `test_samples_capped` migrated to `sample.ci_id` / `sample.excerpt`
+  with an `assert sample.distance is None` on missing-direction
+  samples. CLI-level `test_above_tol_panel_renders` asserts
+  `"above tolerance"` and `"d="` substrings.
+- `CLAUDE.md`: Part-1 "Decisions recorded" bullet rewritten to cover
+  all three directions (above-tolerance, missing-in-target,
+  missing-in-produced), the `Sample` dataclass, the red-vs-yellow
+  border convention, and the worst-drift sample ranking.
+
+Full suite after Part 2: **256/256 green, ruff clean.**
+
+Deferred (post-shipping): per-lg / per-tp mean-drift breakdowns
+inside the VALUE panel, drift-vs-length correlation line, a
+`--source-samples N` flag if the panel becomes the dominant validate
+use case. Rejected: a separate `DriftStatsBlock` type (same fields +
+one distance per sample is simpler), folding above-tol samples into
+the existing `worst drifts` table (would bloat the numeric view and
+duplicate source lookup).
+
+Full design and rejected alternatives in the "Extension — source
+stats for above-tolerance records" section of
+`.progress/validate-source-stats/notes.md`.
