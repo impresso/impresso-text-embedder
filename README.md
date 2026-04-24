@@ -38,9 +38,28 @@ uv run impresso-embed-create \
 
 Useful flags: `--embedding-level {text,sentence,chunk}`, `--model-revision`,
 `--alias EXP GDL --year-min 1910 --year-max 1920`, `--force`, `--dry-run`,
-`--include-text`, `--normalize-embeddings`, `--min-char-length 400`.
+`--normalize-embeddings`, `--min-char-length 400`.
 
 `--help` lists everything.
+
+#### Embedding level vs. chunking strategy
+
+`--embedding-level` picks *what* gets embedded:
+
+- `text` — one embedding per content item from the full reconstructed text.
+  No explicit long-text handling: inputs longer than the model's
+  `max_seq_length` (8192 tokens) are silently truncated by the tokenizer.
+- `sentence` — one embedding per sentence, using the input's pre-existing
+  `sents` field. No chunking involved.
+- `chunk` — splits the text via a chunking strategy and emits one embedding
+  per chunk.
+
+`--chunking-strategy` is only consulted when `--embedding-level=chunk`. It
+selects an entry from the chunking registry (`src/impresso_text_embedder/chunking/`).
+Currently registered: `semantic` (default) — `chonkie.SemanticChunker` with
+`minishlab/potion-base-8M`, threshold `0.5`, chunk size `1024`, min
+sentences `5`. `sentence` and `text` are *not* chunking strategies and are
+not in the registry.
 
 ### Validate an output file
 
