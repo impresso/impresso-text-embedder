@@ -19,6 +19,27 @@ COPY src ./src
 # wheel ABI compatibility intact).
 RUN pip install --no-cache-dir .
 
+# Hard cap transformers at 4.x. transformers>=5 changed model loading to
+# meta-device materialization, which frees the storage behind
+# `persistent=False` buffers without re-initializing them. Alibaba-NLP's
+# custom modeling file (loaded by `trust_remote_code=True` for
+# gte-multilingual-base) registers `position_ids` with `persistent=False`,
+# so after load it contains uninitialized memory; `rope_cos[position_ids]`
+# then trips a CUDA IndexKernel assert on any input, including a 6-token
+# smoke test. Upstream: HF transformers #43950 / #44534; model discussion
+# #30. Alibaba-NLP/new-impl is unmaintained (last commit Aug 2024) so the
+# fix has to live on our side. Also cap sentence-transformers below 5.2:
+# 5.2 is the first line that pulls transformers v5 by default on fresh
+# resolves. pyproject.toml carries the same caps — this belt-and-suspenders
+# RUN protects against pip resolver drift and makes the reason visible at
+# the image layer. See .progress/transformers-v5-regression/notes.md.
+RUN pip install --no-cache-dir \
+      "transformers>=4.46,<5" \
+      "sentence-transformers>=5.0,<5.2"
+
+# Build-time guardrail: fail the build if the transformers cap slipped.
+RUN python -c "import transformers; v=transformers.__version__; assert v.startswith('4.'), f'transformers was upgraded to {v} — see .progress/transformers-v5-regression/notes.md'"
+
 ENV PYTHONUNBUFFERED=1
 
 USER ${LDAP_USERNAME}
