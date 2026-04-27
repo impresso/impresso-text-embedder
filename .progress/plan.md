@@ -1,450 +1,273 @@
 # Migration plan — impresso-text-embedder
 
-Living step list. Statuses: `todo` / `wip` / `done` / `deferred`. Slug names are stable; order can shift. See `/Users/adrien/.claude/plans/graceful-wishing-lake.md` for the mechanism this follows, and `CLAUDE.md` at repo root for package intent.
+## What this file is
 
-| # | Slug | Status | Notes folder? |
-|---|---|---|---|
-| 1 | package-skeleton | done | no |
-| 2 | io-layer | done | `.progress/io-layer/` |
-| 3 | schema-text-rebuild | done | no |
-| 4 | model-encoder | done | `.progress/gpu-throughput/` |
-| 5 | chunking | done | `.progress/chunking/` |
-| 6 | create-cli | done | `.progress/create-cli/` |
-| 7 | validate-cli | done | `.progress/validation-metric/` |
-| 8 | e2e-docs | done | no |
-| 9 | docker-runai | done | `.progress/docker-runai/` |
-| 10 | reembed-on-change | done | `.progress/reembed-on-change/` |
-| 11 | gpu-profiles | done | `.progress/gpu-profiles/` |
-| 12 | drop-impresso-essentials | done | `.progress/io-layer/` |
-| 13 | io-throughput | done | `.progress/io-throughput/` |
-| 14 | model-revision-pin | done | `.progress/model-revision-pin/` |
-| 15 | structured-logging | done | `.progress/structured-logging/` |
-| 16 | long-doc-chunking | partial | `.progress/long-doc-chunking/` |
-| 17 | validate-source-stats | done | `.progress/validate-source-stats/` |
+The chronological ledger of the migration from the Make/script layout on
+`main` to the Python package on `feat/migration-python-package`. Step
+numbers are stable; statuses advance as each step lands.
 
-## Step details
+- **Not the rulebook.** Current architectural rules live in
+  [`CLAUDE.md`](../CLAUDE.md), under
+  [Decisions recorded](../CLAUDE.md#decisions-recorded).
+- **Not the design narrative.** Each numbered step links to a
+  `.progress/<slug>/` notes folder where the mechanism, rationale,
+  rejected alternatives, and step-specific open items live.
+- **How to read it.** Scroll the status table for the at-a-glance picture,
+  then click into a step. Each step body is a one-paragraph summary with
+  pointers — depth lives in the linked folder.
+
+Statuses: `done` · `partial` · `wip` · `todo` · `deferred`.
+
+## Status at a glance
+
+| #  | Step                                                      | Status     | Notes folder                                                  |
+| -- | --------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
+| 1  | [package-skeleton](#1-package-skeleton)                   | `done`     | —                                                             |
+| 2  | [io-layer](#2-io-layer)                                   | `done`     | [`io-layer/`](./io-layer/)                                    |
+| 3  | [schema-text-rebuild](#3-schema-text-rebuild)             | `done`     | —                                                             |
+| 4  | [model-encoder](#4-model-encoder)                         | `done`     | [`gpu-throughput/`](./gpu-throughput/)                        |
+| 5  | [chunking](#5-chunking)                                   | `done`     | [`chunking/`](./chunking/)                                    |
+| 6  | [create-cli](#6-create-cli)                               | `done`     | [`create-cli/`](./create-cli/)                                |
+| 7  | [validate-cli](#7-validate-cli)                           | `done`     | [`validation-metric/`](./validation-metric/)                  |
+| 8  | [e2e-docs](#8-e2e-docs)                                   | `done`     | —                                                             |
+| 9  | [docker-runai](#9-docker-runai)                           | `done`     | [`docker-runai/`](./docker-runai/)                            |
+| 10 | [reembed-on-change](#10-reembed-on-change)                | `done`     | [`reembed-on-change/`](./reembed-on-change/)                  |
+| 11 | [gpu-profiles](#11-gpu-profiles)                          | `done`     | [`gpu-profiles/`](./gpu-profiles/)                            |
+| 12 | [drop-impresso-essentials](#12-drop-impresso-essentials)  | `done`     | [`io-layer/`](./io-layer/)                                    |
+| 13 | [io-throughput](#13-io-throughput)                        | `done`     | [`io-throughput/`](./io-throughput/)                          |
+| 14 | [model-revision-pin](#14-model-revision-pin)              | `done`     | [`model-revision-pin/`](./model-revision-pin/)                |
+| 15 | [structured-logging](#15-structured-logging)              | `done`     | [`structured-logging/`](./structured-logging/)                |
+| 16 | [long-doc-chunking](#16-long-doc-chunking)                | `partial`  | [`long-doc-chunking/`](./long-doc-chunking/)                  |
+| 17 | [validate-source-stats](#17-validate-source-stats)        | `done`     | [`validate-source-stats/`](./validate-source-stats/)          |
+
+## Currently active
+
+- [Step 16 — `long-doc-chunking`](#16-long-doc-chunking) (`partial`):
+  the framework + `fixed-window` chunker + `mean` aggregation shipped.
+  Additional strategies are small follow-ups — each is one module + one
+  `register_strategy` call + one `choices=` entry.
+
+## Open items needing real hardware / data
+
+Per-step acceptance items that require live measurement, not code:
+
+- **Step 11**: per-profile batch-size calibration; confirm FA3 fires on
+  H100; A100↔H100 `--tol 1e-4` cross-check; record RCP node-type labels.
+- **Step 13**: confirm GPU SM utilization ≥85% during steady-state encode.
+- **Step 16**: real-data calibration of `--long-doc-chunk-tokens`;
+  per-language `chars_per_token` for the fast gate; long-doc query-set
+  recall vs. the truncate baseline.
+- **Step 17**: per-`lg` / per-`tp` mean-drift breakdowns inside the
+  VALUE panel; drift-vs-length correlation; `--source-samples N` flag.
+
+## Steps
 
 ### 1. package-skeleton
-`pyproject.toml` (hatchling + uv), `src/impresso_text_embedder/` layout, Python ≥3.10, ruff config, `LICENSE` (AGPL-3.0-or-later reused from `main`), `tests/` with placeholder, short `README.md` linking to `CLAUDE.md`, `.gitignore` update, delete `.flake8`. Verify: `uv sync` resolves, `uv run pytest` green.
+
+`done` · no notes folder
+
+Initial scaffolding: `pyproject.toml` (hatchling + uv), `src/impresso_text_embedder/`, Python ≥ 3.10, ruff config, `LICENSE` (AGPL-3.0-or-later, mirrored from `main`), `tests/` placeholder, gitignore update, `.flake8` removed. Verified by `uv sync` resolving cleanly and the placeholder test passing.
 
 ### 2. io-layer
-Wrap `impresso_essentials.io.s3` for `.jsonl.bz2` streaming, provider/alias/year iteration, idempotent skip-if-exists. Dotenv loaded at CLI boundary only.
+
+`done` · [`io-layer/`](./io-layer/)
+
+Streaming S3 reader for `.jsonl.bz2` shards, provider/alias/year enumeration, idempotent skip-if-exists. `impresso_essentials.io.s3.read_jsonlines` deliberately bypassed because it slurps the whole file into memory and breaks the prefetch model. Dotenv loaded at the CLI boundary only.
 
 ### 3. schema-text-rebuild
-Port `rebuild_ft_from_offsets`, `rebuild_sentence_from_offsets` verbatim. Dataclass/pydantic types for the three output schemas from `main:lib/text_embedding_processor.py`.
+
+`done` · no notes folder
+
+Ports `rebuild_ft_from_offsets` and `rebuild_sentence_from_offsets` verbatim from `main:lib/text_embedding_processor.py`. Typed schemas for the three output shapes (text / sentence / chunk).
 
 ### 4. model-encoder
-SentenceTransformer load + A100 optimizations (bf16 autocast, optional flash-attn, tunable batch size). Measurement deferred to real-GPU session; unit tests assert API shape only. Populate `.progress/gpu-throughput/notes.md`.
+
+`done` · [`gpu-throughput/`](./gpu-throughput/)
+
+`SentenceTransformer` load + bf16 autocast around `encode`, fp32 weights, `inference_mode`, `trust_remote_code=True` for `gte-multilingual-base`. See CLAUDE.md decision **"A100 bf16 strategy"**. Real-GPU throughput measurement landed later (steps 11 and 13).
 
 ### 5. chunking
-Registry + chonkie semantic strategy (threshold 0.5, chunk_size 1024, min_sentences 5). Contract in `.progress/chunking/notes.md`.
+
+`done` · [`chunking/`](./chunking/)
+
+Kwargs-capable `text → K-chunks` registry. Ships `semantic` (chonkie `SemanticChunker` at threshold `0.5`, chunk size `1024`, min sentences `5`) for `--embedding-level=chunk`. Step 16 later extends the same registry with `fixed-window` and `token-budget` for the long-doc text path.
 
 ### 6. create-cli
-`impresso-embed-create --provider ...` orchestrator, 1:1 mapping, async prefetch + upload overlap. Flags listed in `CLAUDE.md`.
+
+`done` · [`create-cli/`](./create-cli/)
+
+`impresso-embed-create --provider …` CLI entry point + orchestrator: 1:1 input→output mapping, model load, encode, upload. Output schema aligned to the Impresso document-embeddings spec — required `{ci_id, model_id, embedding, size}`, optional `{ts, ci_type}`. See CLAUDE.md decision **"Text-level output schema aligned with Impresso document-embeddings schema"**. The async prefetch + upload overlap originally planned for this step actually landed in step 13.
 
 ### 7. validate-cli
-`impresso-embed-validate <path> [--target ...] [--tol ...]`. Metric + default tol decided and documented in `.progress/validation-metric/notes.md`.
+
+`done` · [`validation-metric/`](./validation-metric/)
+
+`impresso-embed-validate <path> [--target] [--tol]`. Metric: cosine distance on L2-normalized vectors; default tolerance `1e-4`. See CLAUDE.md decision **"Validation metric"**. Step 17 later extends this CLI with `--source` diagnostics + Rich rendering.
 
 ### 8. e2e-docs
-Tiny local fixture end-to-end; polish `README.md`; resolve or explicitly defer remaining "Things to decide" items in `CLAUDE.md`.
+
+`done` · no notes folder
+
+Tiny local fixture run end-to-end through `impresso-embed-create`; first README polish; pruned the "Things to decide" list in CLAUDE.md, splitting it into "Decisions recorded" and "Still open — needs real GPU time".
 
 ### 9. docker-runai
-Container image + Run:AI submission for EPFL RCP. Reference: `feat/docker` branch. Deliverables:
-- `Dockerfile` based on `nvcr.io/nvidia/pytorch:25.03-py3`, LDAP-matched user (PVC ownership), `pip install .` from copied source, `ENTRYPOINT ["impresso-embed-create"]`.
-- `.env.docker.example` (LDAP UID/GID, registry/project, Harbor robot creds).
-- `Makefile` (slim — docker build/push, k8s secrets, runai submit + interactive debug). No data-processing logic; the CLI handles that.
-- `.gitignore` entries for `.env.docker` and `config.local.mk`.
-- `CLAUDE.md` section linking to the workflow.
-Decisions and gotchas in `.progress/docker-runai/notes.md`.
+
+`done` · [`docker-runai/`](./docker-runai/)
+
+Container image (`nvcr.io/nvidia/pytorch:25.03-py3`) with LDAP-matched user for PVC ownership; `ENTRYPOINT ["impresso-embed-create"]`. Slim `Makefile` for docker build/push, k8s secret creation, runai submit + interactive debug — no data-processing logic in the Makefile.
 
 ### 10. reembed-on-change
-Re-embed an output when its input has been re-uploaded on S3, without resurrecting the old stamp tree or taking on the full `impresso_essentials.versioning` manifest system yet. Mechanism: compare S3 `LastModified` of input vs existing output at skip-decision time. `--force` still overrides unconditionally.
-- `io.py`: add `last_modified: datetime | None` to `InputKey`, populate from `list_objects_v2` (no extra HEAD). Add `head_last_modified(bucket, key) -> datetime | None` (None on 404).
-- `pipeline.py`: rewrite the skip branch in `process_file` and its dry-run twin in `process_provider` to compare timestamps. Distinct log lines for "skip (up-to-date)" vs "reprocess (input newer)".
-- Tests: cover {output missing, output newer, output older, --force overrides}. Update existing `object_exists` patches to the new helper where the skip path is exercised.
-- `CLAUDE.md`: record the decision under "Decisions recorded"; note the known gap (versioning manifest still deferred).
-Rationale, trade-offs, and the explicit choice against option 2/3/4 in `.progress/reembed-on-change/notes.md`.
+
+`done` · [`reembed-on-change/`](./reembed-on-change/)
+
+Skip-decision compares S3 `LastModified` of input vs. existing output; re-embeds when input is newer. `--force` overrides unconditionally. See CLAUDE.md decision **"Re-embed on input change"**. Known gap: byte-identical re-uploads still trigger a re-embed; this does not replace the deferred `impresso_essentials.versioning` manifest system.
 
 ### 11. gpu-profiles
-Support A100 and H100 (incl H200) from the same codebase and the same container image, picking the right default batch size per device. Attention kernel selection is transparent: xformers' `memory_efficient_attention` dispatches to FA3 on Hopper and FA2 on Ampere on its own, based on Q/K/V dtype inside the existing bf16 autocast region. HF-generic `attn_implementation` is **rejected** by the model (`NewModel does not support Flash Attention 2.0 yet`) — the Alibaba-NLP fast path requires `unpad_inputs=True` + `use_memory_efficient_attention=True` set on the model config via `config_kwargs` (not `model_kwargs` — ST v5 pre-loads the config and passes it explicitly, which skips HF's kwarg-to-config routing). Research and feature-comparison table in `.progress/gpu-profiles/notes.md`.
-- `src/impresso_text_embedder/accel.py`: new module. `Profile` dataclass (`name`, `default_batch_size`, `notes`). `detect_profile()` reads `torch.cuda.get_device_capability()`: `(8,0)`→A100 batch 64, `(9,0)`→H100/H200 batch 128, other-CUDA→batch 32 with a warning, no-CUDA→batch 8. `has_xformers()` probes the import. `log_profile()` emits one INFO line at model load. All cached with `lru_cache`.
-- `model.py`: call `log_profile()` at load time. When CUDA + xformers importable, pass `config_kwargs={"unpad_inputs": True, "use_memory_efficient_attention": True}` to `SentenceTransformer`; omit otherwise (keeps CPU / unit-test path unchanged). Must be `config_kwargs` rather than `model_kwargs` so the flags land on `self.config` before `NewModel.__init__` runs — see note for why the `model_kwargs` path is broken under ST v5. Existing fp32-weights + bf16-autocast strategy stays — xformers dispatches on Q/K/V dtype and Q/K/V are bf16 inside the autocast region.
-- `cli/create.py`: `--batch-size` default → `None`; resolved in `main()` from `detect_profile().default_batch_size`. Explicit flag still overrides.
-- `pyproject.toml`: add `accel = ["xformers>=0.0.28"]`. Single extra, not two. Matters for non-NGC local dev.
-- `Dockerfile`: NGC `pytorch:25.03-py3` does **not** bundle xformers (verified against the release notes' component list — an earlier note in this plan wrongly claimed it did). Install it explicitly: `pip install --no-deps "xformers==0.0.30" --index-url https://download.pytorch.org/whl/cu128`. `--no-deps` avoids pip re-installing torch. Followed by a build-time `python -c "import xformers"` assertion (mirrors the numpy guard). xformers alone gives a CUTLASS memory-efficient kernel + unpadding; the FA2/FA3 dispatch requires the separate `flash-attn` package — deferred as a measurable lever. One image, not two — it's arch-agnostic; the encoder auto-detects at runtime.
-- `Makefile`: add `RUNAI_GPU_TYPE ?=` and thread `--node-type $(RUNAI_GPU_TYPE)` onto `runai submit` / `runai-interactive` when set. Documented in `make help`. Exact RCP node-type labels TBD (OPEN in notes).
-- Tests: `tests/test_accel.py` unit-tests profile selection with `unittest.mock.patch` on `torch.cuda.is_available` / `get_device_capability`, plus `has_xformers` toggling via `sys.modules`. No live-GPU assertions.
-- Validation (deferred to live-GPU time): regenerate a golden on A100, re-embed the same input on H100, confirm `impresso-embed-validate` passes at `--tol 1e-4` cosine. Also probe whether FA3 actually fires on H100. Record the outcome in `.progress/gpu-profiles/notes.md`.
-- `CLAUDE.md`: "Target hardware" reframed as A100+H100; decisions for profile detection + xformers+unpadding path wired; FP8/TE + flash-attn-standalone listed as deferred levers.
-Rationale (runtime-detection-not-build-time, why xformers is the only fast path, A100→H100 feature table, ~2.0–2.8× expected end-to-end speedup) in `.progress/gpu-profiles/notes.md`.
+
+`done` · [`gpu-profiles/`](./gpu-profiles/)
+
+Same image runs on A100 and H100/H200. `accel.py` detects capability at model-load time and picks the per-profile default batch size; xformers' `memory_efficient_attention` dispatches FA2/FA3 transparently from inside the bf16 autocast region. `unpad_inputs` + `use_memory_efficient_attention` reach the model config via `config_kwargs` (not `model_kwargs` — ST v5 pre-loads the config). See CLAUDE.md decisions **"GPU profile detection"** and **"xformers + unpadding wired as the default fast path"**.
 
 ### 12. drop-impresso-essentials
-Drop the `impresso-essentials` dependency entirely. Blocker: building on `nvcr.io/nvidia/pytorch:25.03-py3`, `pip install .` fails because `impresso-essentials==1.4.1` hard-pins `numpy==2.2.1` in its metadata, which would uninstall NGC's `numpy==1.26.4` and break the apex/NCCL/transformer-engine/xformers stack (all compiled against numpy-1.x ABI). A `--no-deps` install doesn't work either: `impresso_essentials/io/s3.py` does `import dask.bag as db` at module level, and dask isn't a dep we can satisfy without reintroducing numpy 2.x (and pandas, pyarrow…). The three symbols we consume (`get_s3_client`, `get_s3_resource`, `upload_to_s3`) don't use dask at all — they're ~40 lines of boto3 wrappers around `SE_*` env vars. Vendor them.
-- `src/impresso_text_embedder/io.py`: replace `from impresso_essentials.io.s3 import …` with local definitions of `get_s3_client`, `get_s3_resource`, `upload_to_s3`. Read `SE_ACCESS_KEY`/`SE_SECRET_KEY`/`SE_HOST_URL` from env (dotenv is already loaded once at the CLI boundary — don't re-call `load_dotenv()`). Keep the `upload_local_file` wrapper that raises on `False` return.
-- `pyproject.toml`: `impresso-essentials>=1.4.1` already removed. `boto3>=1.34`, `smart-open[s3]>=7.0`, `python-dotenv>=1.0` cover the runtime needs.
-- `Dockerfile`: remove the `pip install --no-deps "impresso-essentials==1.4.1"` line and the `from impresso_essentials.io.s3 import …` smoke test. Keep the `numpy.__version__.startswith('1.26')` assertion as a guardrail against silent upgrades.
-- `CLAUDE.md`: drop the `uv pip install --no-deps …` step from Commands; rewrite the "Reuse `impresso-essentials`" section to explain that the three S3 helpers are vendored (cite this step); update the "Decisions recorded" bullet so it reflects vendoring, not `--no-deps`.
-- `.progress/io-layer/notes.md`: update the "What we reuse" table (now: no functions reused — three are vendored) and add a subsection "Why we dropped impresso-essentials" with the numpy-ABI + dask-top-level-import argument.
-- Tests: `tests/test_io.py` already patches functions as attributes on our own `io` module, not on `impresso_essentials`. Verify it still passes unchanged.
-- Verify: `uv pip uninstall impresso-essentials`, `uv run pytest`, `uv run impresso-embed-create --help`. Then confirm the image with `make docker-build`.
-Rationale in `.progress/io-layer/notes.md`.
+
+`done` · [`io-layer/`](./io-layer/) (shared with step 2)
+
+Removed the `impresso-essentials` runtime dependency entirely; vendored the three S3 helpers we used (`get_s3_client`, `get_s3_resource`, `upload_to_s3`) as ~40 lines of boto3 wrappers in `src/impresso_text_embedder/io.py`. See CLAUDE.md decision **"impresso-essentials vendored, not imported"**.
 
 ### 13. io-throughput
-Close the IO/CPU half of the "GPU must be the bottleneck" target from
-`CLAUDE.md` — `.progress/create-cli/notes.md` explicitly deferred
-prefetch/upload overlap here. Scope is CPU- and IO-side only; GPU-side
-decisions live in `.progress/gpu-throughput/` and `.progress/gpu-profiles/`.
 
-**Shipped (Tier A)**, full catalogue of alternatives and rationale in
-`.progress/io-throughput/notes.md`:
-- `telemetry.py`: `StageTimer` context manager + `GpuSampler` background
-  thread (2 Hz, `pynvml` soft-imported, NGC ships it) + `format_stats_line`.
-  Emits one INFO line per completed file with `download_s`, `encode_s`,
-  `upload_wait_s`, `gpu_util_mean`/`p10`/`n`.
-- `pipeline.process_provider`: rewritten around two
-  `ThreadPoolExecutor(max_workers=1)` — prefetch and upload. File N+1
-  downloads while file N encodes; file N uploads while file N+1 encodes.
-  Skip logic pre-applied before prefetch via `_plan_files`.
-- `pipeline.py` + `validate.py`: `json` → `orjson` on read and write.
-  Output bz2 opened in binary mode (orjson returns bytes); `OPT_APPEND_NEWLINE`
-  replaces the manual `\n` write. One test behaviour change: orjson
-  rejects bare `NaN` at parse time — `test_catches_nan` now asserts
-  non-empty errors rather than a specific "non-finite" message.
-- `io.py`: `download_to_local` (multipart ranged GETs), `iter_jsonl_bz2_path`
-  (local stream), `DEFAULT_TRANSFER_CONFIG` (8 MB / 8 MB / 10 threads).
-- Regression guard: `tests/test_pipeline.py::test_process_provider_overlaps_prefetch_and_upload`
-  uses two `threading.Event`s to pin file N's upload mid-flight and assert
-  file N+1's download has already started.
-- `CLAUDE.md` "Decisions recorded" updated with JSON codec, pipeline
-  overlap + `TransferConfig` defaults, and per-file telemetry.
+`done` · [`io-throughput/`](./io-throughput/)
 
-**Not implemented — potential follow-ups** (see Tier B / Tier C / Known
-deferred from Tier A sections of `.progress/io-throughput/notes.md`):
-`indexed_bzip2` parallel decompression, in-file reader thread, output
-codec swap (bz2→zstd, cross-team), token-budget batching, `msgspec`,
-pre-tokenisation on CPU threads, chunker pre-compute thread,
-`OPT_SERIALIZE_NUMPY` on the output side, `--transfer-concurrency` /
-`--multipart-chunksize` CLI flags, CLI escape hatch to disable the
-prefetch/upload overlap.
-
-Verify once observed on real hardware: GPU SM utilization ≥85% during
-steady-state encode on A100 (matches the acceptance bar in `CLAUDE.md`);
-no regression in `impresso-embed-validate` at `--tol 1e-4`. Both are
-acceptance checks, not gating for code; the code landed with 151/151
-tests green and ruff clean.
+Closes the CPU/IO half of the "GPU must be the bottleneck" target: prefetch + upload overlap via two single-slot `ThreadPoolExecutor`s, `json` → `orjson` on read and write, multipart S3 transfers (`TransferConfig`: 8 MB / 8 MB / 10 threads), and per-file telemetry (`download_s` / `encode_s` / `upload_wait_s` / `gpu_util_mean,p10`). See CLAUDE.md decisions **"Per-provider pipeline overlap"**, **"JSON codec"**, **"Per-file telemetry"**.
 
 ### 14. model-revision-pin
-Pin the HF revision of `Alibaba-NLP/gte-multilingual-base` to `f7d567e`
-so runs are reproducible and the `--tol 1e-4` cosine validation contract
-is stable against upstream re-tags. Single source of truth lives in
-`src/impresso_text_embedder/model.py` as `DEFAULT_MODEL_REVISION`;
-`load_model(revision=DEFAULT_MODEL_REVISION, …)` and
-`cli/create.py` (`--model-revision` default) both read it. The
-`Makefile` mirrors the pin as `CREATOR_NAME`/`HF_MODEL_NAME`/
-`HF_MODEL_VERSION` (`?=` so `.env.docker` wins) and `runai-submit`
-forwards them as explicit `--model-name` + `--model-revision`, which
-makes the pin recoverable from `runai describe job` even if the image
-changes. Tests: three assertion strings updated for the new default
-(`tests/test_cli_create.py::test_main_non_dry_run_loads_model`,
-`tests/test_e2e.py`, and a new
-`test_parser_pins_model_revision_by_default` that guards against
-accidental un-pin); `tests/test_pipeline.py::_cfg` still passes
-`model_revision=None` so its `@default` assertions are unaffected by
-the CLI default. Output slug (`embeddings_gte_v1-1-0`) intentionally
-stays revision-agnostic — matches the existing "Decisions recorded"
-note in `CLAUDE.md`. Rationale, bump workflow, and known gaps
-(`huggingface_hub` SHA-verify is a cheap deferred follow-up) in
-`.progress/model-revision-pin/notes.md`.
+
+`done` · [`model-revision-pin/`](./model-revision-pin/)
+
+`Alibaba-NLP/gte-multilingual-base` pinned to revision `f7d567e`. Single source of truth: `DEFAULT_MODEL_REVISION` in `src/impresso_text_embedder/model.py`. The `Makefile` mirrors the pin and `runai-submit` forwards it as an explicit `--model-revision` so the pin is recoverable from `runai describe job`. The output slug stays revision-agnostic by design. See CLAUDE.md decision **"Model revision pinned to `f7d567e`"**.
 
 ### 15. structured-logging
-Split runtime logs into a file (full detail) and the terminal (a `tqdm`
-progress bar over the planned files + ERROR records only), so a Run:AI
-job writes a searchable log to scratch while the submitting user sees a
-clean progress readout.
 
-**Log file path.** Default
-`/rcp-scratch/<username>/experiments/embeddings/<YYYY-MM-DD>/<provider>.log`.
-Username comes from `getpass.getuser()` — inside the container this
-matches `LDAP_USERNAME` because the Dockerfile creates and runs as that
-user. `--log-dir <dir>` overrides the base path (keeps the
-`<YYYY-MM-DD>/<provider>.log` suffix). If `/rcp-scratch/` does not exist
-and no `--log-dir` override is given, the CLI exits non-zero with a clear
-error ("PVC not mounted — pass --log-dir or mount /rcp-scratch"). No
-silent fallback to `./logs/` or similar; test runs use `--log-dir` or
-`tmp_path` fixtures.
+`done` · [`structured-logging/`](./structured-logging/)
 
-**Terminal policy.** One `tqdm.tqdm` bar over the post-skip
-`to_process` list, `file=sys.stderr`. `pbar.set_description(alias/year)`
-while a file is encoding; after each file completes,
-`pbar.set_postfix(dl=…s enc=…s up=…s gpu=…%)` with the `StageTimer`
-totals so the user sees live throughput. ERROR-level records reach the
-terminal through a custom `TqdmLoggingHandler` that calls `tqdm.write()`
-(one line above the bar, doesn't shred it). No INFO/WARNING/DEBUG on
-the terminal. Bar auto-disables on non-tty (`disable=None`), so tests
-and pipes don't emit progress noise.
-
-- `src/impresso_text_embedder/logging_setup.py`: new module.
-  `configure_logging(provider, log_dir=None, log_level_file="INFO") -> Path`.
-  Resolves the log path, creates the date directory, attaches a
-  `FileHandler` at the requested level and a `TqdmLoggingHandler` at
-  ERROR. Called once from `cli/create.py`'s `main()`. Returns the path so
-  `main()` can print `"logging to <path>"` to stderr (plain `print`, not
-  logging) on the first line before the bar starts.
-- `src/impresso_text_embedder/cli/create.py`: replace `--log-level` with
-  `--log-level-file` (default `INFO`) and add `--log-dir <path>`. Drop the
-  existing `logging.basicConfig(...)` call; `configure_logging` owns the
-  root logger now. Print the resolved log path to stderr on startup and
-  the processed/skipped summary to stderr at exit (both plain `print`, so
-  they show regardless of handler levels).
-- `src/impresso_text_embedder/pipeline.py`: wrap the `process_provider`
-  file loop with `tqdm(total=len(to_process), file=sys.stderr, disable=None)`.
-  After each file completes, pull `timer.totals` + `gpu.summary()` and
-  `pbar.set_postfix(...)`. The existing `format_stats_line` INFO line
-  stays — it goes to the file handler, not the terminal. Do **not**
-  import `tqdm` at module top-level gated behind a test (keep it as a
-  normal dependency; the bar is always opt-out via non-tty detection).
-- `pyproject.toml`: add `tqdm>=4.66` to runtime deps.
-- Tests:
-  - `tests/test_logging_setup.py`: (a) no `/rcp-scratch/` + no override
-    → `SystemExit` with message mentioning `--log-dir`; (b) `--log-dir
-    tmp_path` creates the file at `<tmp>/<date>/<provider>.log` and INFO
-    records land in it; (c) ERROR records reach the `TqdmLoggingHandler`
-    (patch `tqdm.write` and assert call); (d) INFO records do **not**
-    reach the terminal handler.
-  - `tests/test_cli_create.py`: assert the parser has `--log-dir` and
-    `--log-level-file`; delete / update the reference to `--log-level`.
-  - `tests/test_pipeline.py`: keep existing behaviour (tqdm
-    auto-disables on non-tty stderr in CI). Add one assertion that
-    `pbar.set_postfix` is called per completed file by patching
-    `impresso_text_embedder.pipeline.tqdm`. The existing
-    prefetch/upload-overlap regression test keeps the same threading
-    gates.
-- `CLAUDE.md`: add a "Decisions recorded" entry summarising the file
-  layout, fail-fast policy, and terminal-ERROR-only policy. One-line
-  addition under "Commands" showing `--log-dir ./logs` for local dev.
-- `Makefile`: no change needed — the container already has
-  `/rcp-scratch` mounted via PVC, so the default path resolves cleanly.
-  (A follow-up may surface `--log-dir` as an extra knob, but the default
-  is already the right shape.)
-
-Rationale and the rejected alternatives (per-run timestamped dir, dev
-fallback to `./logs`, structured JSON logs) in
-`.progress/structured-logging/notes.md`.
+`impresso-embed-create` splits its output: full INFO log to `/rcp-scratch/<user>/experiments/embeddings/<YYYY-MM-DD>/<provider>.log` (override with `--log-dir`); terminal gets a `tqdm` bar with per-file postfix (`dl=…s enc=…s up=…s gpu=…%`) and ERROR records only. Fail-fast when neither `/rcp-scratch` nor `--log-dir` is available. See CLAUDE.md decision **"Structured logging split file ↔ terminal"**.
 
 ### 16. long-doc-chunking
-At `--embedding-level text`, documents longer than the model's 8192-token
-max context are silently truncated by the HF tokenizer's default
-`truncation=True` (see `embed.py` → `TextBatcher.flush` → `encode_texts`).
-No warning, no tally, no trace in the output. For the Impresso long tail
-(feuilletons, parliamentary records, full-page speeches) this means the
-embedding only represents the head of the document.
 
-**Partial landing (2026-04-23).** The architecture is in place and
-exercised end-to-end for one concrete combination:
-(`chunking=fixed-window`, `aggregation=mean`). Status is "partial"
-on purpose — adding more strategies is a small incremental step and
-the framework is designed to make that cheap. Full shipped/deferred
-list in the "Implementation status" section at the top of
-`.progress/long-doc-chunking/notes.md`. Summary:
+`partial` · [`long-doc-chunking/`](./long-doc-chunking/)
 
-- **Shipped:**
-  - `aggregation/` module with a kwargs-capable registry mirroring
-    `chunking/`. Only `MeanPoolStrategy` (mean + L2 renorm) is
-    registered.
-  - `chunking/fixed_window.py` — **CLI default** long-doc chunker
-    (option B from the catalogue). Tokenize → slice contiguous
-    non-overlapping windows → decode each. Registered as
-    `fixed-window`. Shipped at optimisation level L1 (tokenize +
-    decode per chunk; `model.encode` re-tokenizes); L2/L3 deferred
-    pending profiling evidence that tokenizer overhead matters.
-  - `chunking/token_budget.py` — sentence-aware greedy packer (option
-    D from the catalogue), registered as `token-budget` with a
-    kwargs-capable factory. **Not the CLI default** after review —
-    kept available via the registry for future A/B testing once
-    `fixed-window` has a real-data baseline.
-  - Chunking registry's `register_strategy` / `get_strategy` extended
-    to forward kwargs (backward compatible — zero-arg factories
-    still work).
-  - `EncoderConfig.long_doc: LongDocConfig | None` field; when
-    active, `TextBatcher` detects long docs, chunks them, encodes
-    all texts in one batched `encode_texts` call (short-doc
-    singletons riding the same batch as a long doc's K chunks),
-    then aggregates per-record. Short-doc path is unchanged.
-  - `is_long_doc(text, cfg)` helper with a cheap chars-per-token
-    pre-filter to skip tokenisation on clearly-short docs.
-  - Three new CLI flags: `--long-doc-strategy {truncate,chunk}`
-    (default **`chunk`** — long docs are no longer silently
-    truncated), `--long-doc-chunk-tokens N` (default **`None`** —
-    auto-derived from `tokenizer.model_max_length -
-    num_special_tokens_to_add(pair=False)` at CLI-init time; 8190
-    for gte-multilingual-base; `_FALLBACK_CHUNK_TOKENS=8000` only
-    when the tokenizer doesn't advertise the attrs),
-    `--long-doc-aggregation {mean}`. `truncate` remains available
-    as the opt-out for reproducing pre-step-16 outputs exactly.
-  - Per-file telemetry: new `LONG_DOC_CHUNKED` counter.
-  - Tests across
-    `tests/test_aggregation.py`,
-    `tests/test_chunking_fixed_window.py`,
-    `tests/test_chunking_token_budget.py`,
-    `tests/test_embed.py::TestTextBatcherLongDoc`,
-    `tests/test_embed.py::TestIsLongDoc`,
-    `tests/test_cli_create.py` (new-flag defaults, dry-run gating,
-    aggregation-choices rejection, long-doc-config wiring,
-    `_resolve_chunk_tokens` precedence). Full suite: 225/225 green,
-    ruff clean.
-- **Deferred** (each a small follow-up; the framework means most
-  are a file + one `register_strategy` line + one `choices=` entry):
-  - Other aggregation strategies: length-weighted mean, max pool,
-    first-chunk, position-weighted, attention-weighted.
-  - Other token-aware chunkers: fixed-window, stride overlap,
-    paragraph packer, recursive, chonkie Token/Sentence (with
-    verified tokenizer compat).
-  - Upgrade the token-budget chunker to prefer `record["sents"]`
-    when present (requires extending `ChunkingStrategy.chunk` or
-    building the chunker per-record).
-  - Regenerate the long-doc subset of any integration goldens to
-    match the new chunk-aggregate default.
-  - `n_chunks` metadata on `TextRecord` (gated on schema
-    `additionalProperties` policy).
-  - Calibrate `--long-doc-chunk-tokens` via a sweep on real long docs.
-  - Calibrate `chars_per_token` per language for the fast gate.
+Two orthogonal kwargs-capable registries — `chunking` (text → K chunks) and `aggregation` (K vectors → 1 vector). Default long-doc path at `--embedding-level=text`: `fixed-window` chunker + `mean` aggregation; long docs are no longer silently truncated. `--long-doc-strategy truncate` restores pre-step-16 behaviour. Boundary: chunking only fires when `tokens(doc) > model_max_tokens` (one-shot wins for ≤8192-token docs because the encoder is CLS-pooled). See CLAUDE.md decision **"Long-doc handling at `--embedding-level text`"**.
 
-**Full design-space discovery.** The notes doc retains the original
-strategy catalogue (11 chunking options A–K, 8 aggregation options
-α–θ), literature anchors, the deep-dive that settled "one-shot wins
-for ≤8192-token docs because `gte-multilingual-base` is CLS-pooled",
-and the set of OPEN items. Key takeaways still hold:
+**Still in queue** (each lands as one module + one `register_strategy` line + one `choices=` entry):
 
-- BGE-M3's "chunk to ≤512" recommendation is a multi-vector-regime
-  finding; it does not transfer to our single-vector text-level
-  output.
-- For docs ≤8192 tokens, one-shot encoding is the right choice, not
-  chunk-then-pool (see "Deep dive" in the notes). The implemented
-  boundary — "chunk only when >max_seq_length" — is principled.
-- Late Chunking (Jina 2024) requires a mean-pooled model; it doesn't
-  apply cleanly to our CLS-pooled encoder. Not deferred — rejected
-  for this embedder. Reconsider only if we switch models.
-
-**Validation.** The `--tol 1e-4` cosine validate contract still
-holds — chunk-then-aggregate is deterministic, so a fresh golden
-after flipping the default to `chunk` is a one-time cost. Regression
-tests pass today (216/216). Acceptance on real data (recall on a
-long-doc query set ≥ truncate-baseline) is deferred to real-GPU time;
-record in the notes once measured.
-
-**Backwards compat.** Long-doc documents at `--embedding-level text`
-get different vectors under the new default (`--long-doc-strategy=chunk`)
-than they did pre-step-16. The truncated behaviour was a bug (silent
-data loss), not a feature, which is why `chunk` ships on. `truncate`
-remains available for reproducing legacy outputs exactly. Short-doc
-outputs are byte-identical — the short path was not touched.
-
-Rationale, full strategy catalogue, rejected alternatives (Late
-Chunking as a long-doc solution, paragraph-based packer, recursive
-splitter via LangChain, hierarchical re-encoder), and the expected
-Impresso-specific trade-offs in `.progress/long-doc-chunking/notes.md`.
+- Aggregation strategies: length-weighted mean, max pool, first-chunk, position-weighted, attention-weighted.
+- Chunking strategies: stride overlap, paragraph packer, recursive, chonkie `Token` / `Sentence`.
+- Token-budget chunker: prefer `record["sents"]` when present (extends `ChunkingStrategy.chunk` or builds the chunker per-record).
+- Telemetry: surface `n_chunks` on `TextRecord` (gated on schema `additionalProperties` policy).
+- Calibration: `--long-doc-chunk-tokens` sweep on real long docs; per-language `chars_per_token` for the fast gate.
+- Goldens: regenerate the long-doc subset of any integration goldens to match the new default.
 
 ### 17. validate-source-stats
-Extend `impresso-embed-validate` with (a) source-backed statistics on
-the records that show up in the "missing in target" / "missing in
-produced" buckets, and (b) a Rich-rendered output across all validate
-stats. Both are diagnostic improvements; `ValidationReport.passed` and
-exit codes are unchanged. Reverses the step-7 decision to stay plain
-text — Rich auto-detects TTY and strips ANSI when piped, so the
-substring contracts the step-7 tests locked in keep passing unchanged.
 
-Deliverables:
-- `src/impresso_text_embedder/validate.py`: `SourceStatsBlock`,
-  `SourceStatsAnalysis`, `collect_source_stats(source_path, report,
-  min_char_length=400) -> SourceStatsAnalysis`. Reconstructs text via
-  `ft` if present, else `text.rebuild_ft_from_offsets(sents)`, else
-  empty string. Matches `source["id"] == mismatch.ci_id` (the input
-  schema uses `id`; the embedding schema uses `ci_id`).
-  `ValidationReport` gains one optional `source_stats` field.
-- `src/impresso_text_embedder/cli/validate.py`: `--source <path>`
-  (same path semantics as `--target` — local or `s3://`) and
-  `--source-min-char-length N` (default 400, matches
-  `impresso-embed-create`'s default). Rendering switches to
-  `rich.console.Console` + `Table` + `Panel`. Legacy substring markers
-  (`records_checked=`, `MISMATCH:`, `missing in target (N)`, `p50=`,
-  `log10(distance)`, `worst drifts`, `mismatches`, `OK`, `FAIL`) kept
-  as plain `console.print(..., highlight=False)` lines. Structural-only
-  runs with `--source` emit a WARNING on stderr and otherwise
-  ignore the source.
-- `pyproject.toml`: add `rich>=13` to runtime deps.
-- Tests: every existing substring assertion passes unchanged
-  (pytest's `capsys` is non-TTY, so Rich auto-strips ANSI). New tests:
-  (a) `--source` populates `source_stats` with correct per-block
-  counts for both directions; (b) records present in produced/target
-  but absent from source tally into `not_in_source_ids`; (c) char-length
-  percentiles + `lg` / `tp` bucketing (including `(missing)` bucket);
-  (d) `--source` without `--target` emits warning and no panel;
-  (e) Rich Panel / Table presence via substring
-  assertions on headings (`"missing in target"`, `"length histogram"`,
-  `"samples"`).
-- `CLAUDE.md`: add `--source` under the validate CLI and a
-  "Decisions recorded" bullet summarising the Rich switch + the
-  source-stats feature.
+`done` · [`validate-source-stats/`](./validate-source-stats/)
 
-Rationale, stats catalogue, rejected alternatives (token-accurate
-length, JSON sidecar, replaying the full filter predicate, separate
-`impresso-embed-explain` CLI), and open items (histogram edges,
-sample count) in `.progress/validate-source-stats/notes.md`.
+`impresso-embed-validate --source <path>` cross-references the input shard with each of the three mismatch buckets — above-tolerance, missing-in-target, missing-in-produced — and emits per-direction stats (char-length log-scale histogram, `lg` / `tp` breakdowns, sample excerpts, worst-drift cosine distances) via Rich panels. ANSI auto-strips on non-TTY so legacy substring contracts in tests keep passing. `ValidationReport.passed` and exit codes are unchanged. See CLAUDE.md decision **"Validate — source-backed diagnostics (drifted + missing) + Rich rendering"**.
 
-**Part 2 — above-tolerance source stats (shipped).**
-Extends the Part-1 dataflow with a third direction block keyed by
-`MismatchKind.VALUE`. Same `SourceStatsBlock` shape — the new panel
-reuses the existing counts / histogram / lg / tp / samples rendering
-for free.
+## Adding a new step
 
-Shipped deliverables:
-- `SourceStatsBlock` populated for `MismatchKind.VALUE` ids with the
-  same fields as the missing directions. Record-granularity
-  aggregation collapses K item-level mismatches for one `ci_id` into
-  a single source lookup, with the **max cosine distance** across its
-  items tracked via `_value_distance_per_record(mismatches)`.
-- New `Sample(ci_id, excerpt, distance: float | None)` dataclass
-  replaces the `tuple[str, str]` sample shape. `distance` stays
-  `None` for missing directions, populated for VALUE from
-  `_value_distance_per_record`.
-- Drift-aware sampling: VALUE candidates buffer through the streaming
-  scan, then sort by distance desc at finalise; the top
-  `sample_count` (default 3) land on the panel. Missing-direction
-  sampling keeps "first N seen" semantics.
-- Rich renderer: new `source analysis — above tolerance (N records)`
-  panel with `border_style="red"`, rendered first in
-  `_emit_source_stats` (ahead of the two yellow missing panels).
-  Per-sample line formatted by `_format_sample_line` — emits
-  `  {ci_id}  d={dist:.2e}  {excerpt!r}` when `distance` is set,
-  `  {ci_id}  {excerpt!r}` otherwise.
-- Renamed `_missing_ids_by_direction` → `_target_ids_by_direction`
-  and extended `_SOURCE_DIRECTIONS` to include `VALUE` so the single
-  streaming scan handles all three buckets.
-- New tests in `tests/test_validate.py::TestSourceStatsValueDirection`:
-  `test_value_direction_populated`,
-  `test_value_samples_ordered_by_worst_drift`,
-  `test_value_items_collapse_to_record_max_distance`,
-  `test_value_block_empty_when_no_drift`,
-  `test_value_distances_helper_returns_max_per_record`. The existing
-  `test_samples_capped` migrated to `sample.ci_id` / `sample.excerpt`
-  with an `assert sample.distance is None` on missing-direction
-  samples. CLI-level `test_above_tol_panel_renders` asserts
-  `"above tolerance"` and `"d="` substrings.
-- `CLAUDE.md`: Part-1 "Decisions recorded" bullet rewritten to cover
-  all three directions (above-tolerance, missing-in-target,
-  missing-in-produced), the `Sample` dataclass, the red-vs-yellow
-  border convention, and the worst-drift sample ranking.
+1. **Pick the next number.** Step numbers are stable and never reused.
+2. **Choose a slug.** Lowercase, hyphenated, descriptive (`gpu-profiles`,
+   `validate-source-stats`). The slug is the notes-folder name.
+3. **Decide if a notes folder is warranted.**
+   - **Yes** when the step locks in a non-trivial decision, has rejected
+     alternatives worth recording, or carries a step-specific open-items
+     list. Most steps end up here.
+   - **No** for trivial scaffolding (e.g. steps 1, 3, 8). The status row
+     stays — the body just keeps its detail inline.
+4. **If yes, create `.progress/<slug>/notes.md`** following the
+   workflow in [Building the notes folder](#building-the-notes-folder)
+   below. Mechanism + rationale belong there, **not** in plan.md.
+5. **Add a row** to the [Status at a glance](#status-at-a-glance) table
+   with status `wip` (or `todo` if not started yet).
+6. **Add a step section** under [Steps](#steps) at the end (chronological
+   order). Keep the body short: one-paragraph summary, link to the notes
+   folder if any, optional **"Still in queue"** bullets only when this
+   step has step-specific follow-ups not captured in the global
+   [Open items](#open-items-needing-real-hardware--data) section.
+7. **If the step locks in an architectural rule**, add a bullet under
+   [`CLAUDE.md` → Decisions recorded](../CLAUDE.md#decisions-recorded).
+   plan.md can then reference that decision by name without re-explaining
+   it.
+8. **Advance the status as the step lands**: `wip` → `done` (or `partial`
+   if only a slice landed but the framework supports more, or `deferred`
+   if the step is abandoned).
 
-Full suite after Part 2: **256/256 green, ruff clean.**
+### Building the notes folder
 
-Deferred (post-shipping): per-lg / per-tp mean-drift breakdowns
-inside the VALUE panel, drift-vs-length correlation line, a
-`--source-samples N` flag if the panel becomes the dominant validate
-use case. Rejected: a separate `DriftStatsBlock` type (same fields +
-one distance per sample is simpler), folding above-tol samples into
-the existing `worst drifts` table (would bloat the numeric view and
-duplicate source lookup).
+A good notes folder is research-driven, not opinion-driven. The mechanism
+and rationale recorded here are what future sessions (Claude or human)
+read when they re-encounter the same fork — so the bar is "another agent
+can re-derive the decision in 5 minutes", not "the author remembered why".
+Workflow for a non-trivial step:
 
-Full design and rejected alternatives in the "Extension — source
-stats for above-tolerance records" section of
-`.progress/validate-source-stats/notes.md`.
+1. **Scope the question.** Two or three sentences: what is the user
+   actually constraining, what's load-bearing vs. nice-to-have. Capture
+   this *before* scanning anything — it's the lens for everything below.
+
+2. **Scan the codebase in parallel.** Launch one or more `Explore`
+   subagents in a single message (parallel tool calls) to map the
+   relevant surface area: existing patterns, neighbouring registries,
+   tests that would need to change, prior decisions in `CLAUDE.md`. Use
+   tightly-scoped prompts so the agents return facts, not opinions.
+   Trust their reports; don't repeat the same searches yourself.
+
+3. **Look up 2026 best practice on the web.** Use `WebSearch` for current
+   guidance from Anthropic, HuggingFace, and the relevant package
+   vendors; check upstream issue trackers (GitHub issues, HF
+   discussions) when the topic involves a third-party library. Cite the
+   URLs in the notes file so future sessions can re-check freshness.
+   Always put the year in the search query — knowledge cutoffs drift
+   and "best practice" rotates.
+
+4. **Read upstream source when the issue is in someone else's library.**
+   `git show`, GitHub permalinks, or `pip download && tar xf`. Don't
+   infer API behaviour from docstrings alone — past steps
+   (`transformers-v5-regression`, `upload-integrity`,
+   `drop-impresso-essentials`) only landed cleanly because we read the
+   upstream code.
+
+5. **Enumerate options.** Catalogue at least 2–3 alternatives even when
+   one is obvious — the rejected ones are valuable to record. Use
+   letters (A, B, C…) or numbers; keep each option a paragraph with
+   trade-offs, not a sentence. The full strategy catalogue in
+   [`long-doc-chunking/notes.md`](./long-doc-chunking/notes.md) (11
+   chunkers + 8 aggregators) is the gold-standard pattern.
+
+6. **Validate against existing constraints.** Cross-check the chosen
+   option against [`CLAUDE.md`](../CLAUDE.md) → Non-goals, Decisions
+   recorded, and Hardware target. If the new choice tightens or
+   contradicts an existing rule, surface that explicitly — either
+   update the rule (with justification) or explain why the new context
+   overrides it.
+
+7. **Record rejected alternatives.** One bullet each: option name +
+   one-sentence reason it didn't win. Future sessions hitting the same
+   fork shouldn't have to re-derive.
+
+8. **Record open items.** What the step *does not* close — acceptance
+   bars needing live hardware, calibration TODOs, follow-up steps that
+   warrant their own future entry.
+
+**File structure** (loose convention; match what neighbouring folders do):
+TL;DR (3–5 lines) → scope/context → mechanism → rejected alternatives →
+open items → upstream references with URLs.
+
+## Related notes folders (not tied to a numbered step)
+
+Post-migration decisions that don't have their own step. Linked here so
+readers starting from plan.md can discover them:
+
+- [`normalize-flag-removal/`](./normalize-flag-removal/) — `--normalize-embeddings` flag removed (CLAUDE.md decision: **"--normalize-embeddings removed; encoder must ship Normalize module"**).
+- [`record-filtering/`](./record-filtering/) — record-filtering reason taxonomy and `missing_content_type` carve-out (CLAUDE.md decision: **"Record filtering — `missing_content_type` distinct from `content_type`"**).
+- [`transformers-v5-regression/`](./transformers-v5-regression/) — why `transformers` is pinned `<5` (CLAUDE.md decision: **"Transformers pinned `<5`"**).
+- [`upload-integrity/`](./upload-integrity/) — Ceph `MissingContentLength` workaround + post-upload verification (CLAUDE.md decision: **"Upload integrity"**).
