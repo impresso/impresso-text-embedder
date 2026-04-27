@@ -20,10 +20,12 @@ import itertools
 import logging
 import sys
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -369,6 +371,10 @@ def process_provider(
     to_process, skipped_keys = _plan_files(
         provider, cfg, alias_filter, year_min, year_max, limit
     )
+    log.info(
+        "planned: provider=%s to_process=%d already_done=%d",
+        provider, len(to_process), len(skipped_keys),
+    )
     summary: dict = {
         "processed": 0,
         "skipped": len(skipped_keys),
@@ -379,6 +385,7 @@ def process_provider(
 
     chunker = _resolve_chunker(cfg)
 
+    t0 = time.monotonic()
     with (
         ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch") as prefetcher,
         ThreadPoolExecutor(max_workers=1, thread_name_prefix="upload") as uploader,
@@ -400,6 +407,10 @@ def process_provider(
 
         for i, (input_key, output_key) in enumerate(to_process):
             summary["files"].append(input_key.key)
+            log.info(
+                "start %d/%d %s/%s key=%s",
+                i + 1, len(to_process), input_key.alias, input_key.year, input_key.key,
+            )
             pbar.set_description(f"{input_key.alias}/{input_key.year}")
             local_input = next_input
             timer = StageTimer()
@@ -441,15 +452,22 @@ def process_provider(
 
             summary["processed"] += 1
             gpu = _LAST_GPU_SUMMARY.pop(input_key.key, GpuSummary())
-            log.info(
-                format_stats_line(
-                    f"done s3://{cfg.output_bucket}/{output_key}",
-                    timer,
-                    records=written,
-                    gpu=gpu,
-                    filter_counter=filter_counter,
-                )
+            done_line = format_stats_line(
+                f"done {i + 1}/{len(to_process)} s3://{cfg.output_bucket}/{output_key}",
+                timer,
+                records=written,
+                gpu=gpu,
+                filter_counter=filter_counter,
             )
+            remaining = len(to_process) - (i + 1)
+            if remaining > 0:
+                eta_seconds = (time.monotonic() - t0) / (i + 1) * remaining
+                eta_at = datetime.now(timezone.utc) + timedelta(seconds=eta_seconds)
+                done_line += (
+                    f" eta={_format_eta(eta_seconds)}"
+                    f" eta_at={eta_at.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                )
+            log.info(done_line)
             pbar.set_postfix(**_postfix_stats(timer, gpu))
             pbar.update(1)
 
@@ -460,6 +478,14 @@ def process_provider(
                 _unlink_quiet(prev_output)
 
     return summary
+
+
+def _format_eta(seconds: float) -> str:
+    """Render a non-negative seconds value as ``H:MM:SS`` (hours uncapped)."""
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}"
 
 
 def _postfix_stats(timer: StageTimer, gpu: GpuSummary) -> dict[str, str]:

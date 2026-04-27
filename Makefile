@@ -123,6 +123,8 @@ EMBED_EXTRA_ARGS ?=
 
 # Submit a one-shot job for one provider.
 # Usage: make runai-submit PROVIDER=BNL INPUT_BUCKET=22-rebuilt-final OUTPUT_BUCKET=42-processed-data-final
+# Pass make variables as NAME=value, not --name=value — make eats anything starting with `--`.
+# Forward CLI flags to impresso-embed-create via EMBED_EXTRA_ARGS="--batch-size 128 --force".
 runai-submit:
 	@test -n "$(PROVIDER)"      || { echo "PROVIDER is required";      exit 1; }
 	@test -n "$(INPUT_BUCKET)"  || { echo "INPUT_BUCKET is required";  exit 1; }

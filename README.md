@@ -259,6 +259,10 @@ make runai-submit PROVIDER=BNL \
      EMBED_EXTRA_ARGS="--embedding-level text --batch-size 64"
 ```
 
+Pass these as **make variables** (`NAME=value`), not CLI flags (`--name=value`) —
+`make` parses anything starting with `--` as one of its own options and rejects it.
+CLI flags for `impresso-embed-create` go inside `EMBED_EXTRA_ARGS="…"`.
+
 `make help` lists every target. See [`.progress/docker-runai/`](./.progress/docker-runai/)
 for setup rationale and the secret conventions.
 

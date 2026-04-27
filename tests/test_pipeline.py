@@ -393,6 +393,73 @@ def test_process_provider_updates_tqdm_postfix_per_file(monkeypatch):
         assert "enc" in call
 
 
+def test_process_provider_emits_progress_log_lines(monkeypatch, caplog):
+    """Under non-tty (runai submit), progress is recoverable from the log file.
+
+    Asserts the three log lines that make `tail -f` show position regardless
+    of TTY: a one-shot ``planned: …`` denominator, a ``start i/N …`` per
+    file, and the existing ``done`` line augmented with ``i/N``.
+    """
+    keys = [
+        s3io.InputKey("SNL", "EXP", 1910, "SNL/EXP/EXP-1910.jsonl.bz2", last_modified=_T0),
+        s3io.InputKey("SNL", "EXP", 1911, "SNL/EXP/EXP-1911.jsonl.bz2", last_modified=_T0),
+    ]
+    monkeypatch.setattr(s3io, "list_input_keys", lambda **kw: iter(keys))
+    monkeypatch.setattr(s3io, "head_last_modified", lambda b, k: None)
+    monkeypatch.setattr(
+        em,
+        "encode_texts",
+        lambda model, texts, **_: np.asarray([[0.1, 0.2] for _ in texts], dtype=np.float32),
+    )
+
+    def fake_download(bucket, key, dest, transfer_config=None):
+        rec = {
+            "id": f"rec-{key}",
+            "tp": "ar",
+            "sents": [{"tok": [{"t": "long enough body to pass the min char filter", "o": 0}]}],
+        }
+        with bz2.open(dest, "wt", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+
+    monkeypatch.setattr(s3io, "download_to_local", fake_download)
+    monkeypatch.setattr(s3io, "upload_local_file", lambda *a, **k: None)
+
+    with caplog.at_level("INFO", logger="impresso_text_embedder.pipeline"):
+        summary = pl.process_provider("SNL", model=MagicMock(), cfg=_cfg())
+
+    assert summary["processed"] == 2
+
+    messages = [r.message for r in caplog.records]
+
+    planned = [m for m in messages if m.startswith("planned:")]
+    assert planned == ["planned: provider=SNL to_process=2 already_done=0"]
+
+    starts = [m for m in messages if m.startswith("start ")]
+    assert starts == [
+        "start 1/2 EXP/1910 key=SNL/EXP/EXP-1910.jsonl.bz2",
+        "start 2/2 EXP/1911 key=SNL/EXP/EXP-1911.jsonl.bz2",
+    ]
+
+    done = [m for m in messages if m.startswith("done ")]
+    assert len(done) == 2
+    assert done[0].startswith("done 1/2 s3://out-bkt/")
+    assert done[1].startswith("done 2/2 s3://out-bkt/")
+    # ETA appears on every line except the last (no remaining files to project).
+    assert " eta=" in done[0] and " eta_at=" in done[0]
+    assert " eta=" not in done[1] and " eta_at=" not in done[1]
+
+
+def test_format_eta_renders_hours_minutes_seconds():
+    assert pl._format_eta(0) == "0:00:00"
+    assert pl._format_eta(59) == "0:00:59"
+    assert pl._format_eta(60) == "0:01:00"
+    assert pl._format_eta(3661) == "1:01:01"
+    # Hours are uncapped — a multi-day backfill should still render cleanly.
+    assert pl._format_eta(90061) == "25:01:01"
+    # Negatives clamp to zero rather than rendering ``-0:00:01``.
+    assert pl._format_eta(-5) == "0:00:00"
+
+
 def test_with_batch_size_updates_encoder_only():
     base = _cfg()
     updated = pl.with_batch_size(base, 128)
