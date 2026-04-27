@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--min-char-length",
         type=int,
-        default=400,
+        default=800,
         help="skip records whose reconstructed text is shorter than this many characters",
     )
     p.add_argument(
@@ -117,6 +117,46 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["mean"],
         default="mean",
         help="how to combine chunk embeddings into one document vector when --long-doc-strategy=chunk",
+    )
+
+    # Numerical-ablation toggles. Defaults preserve the historical fast path
+    # (bf16 autocast + xformers memory_efficient_attention + unpad_inputs);
+    # flipping any of them lets an operator bisect drift against an older
+    # baseline by re-encoding a small slice with one lever changed at a time.
+    p.add_argument(
+        "--precision",
+        choices=["bf16", "fp32"],
+        default="bf16",
+        help=(
+            "encode-time numerical precision. 'bf16' (default) wraps "
+            "model.encode() in a torch.autocast(dtype=bfloat16) scope on "
+            "CUDA; 'fp32' skips that scope (model weights are already fp32). "
+            "Use 'fp32' to isolate bf16 as a drift source."
+        ),
+    )
+    p.add_argument(
+        "--attention",
+        choices=["xformers", "eager"],
+        default="xformers",
+        help=(
+            "attention kernel selection. 'xformers' (default) sets "
+            "use_memory_efficient_attention=True on the model config — "
+            "Alibaba's modeling file then routes through "
+            "xformers.ops.memory_efficient_attention. 'eager' omits the "
+            "flag, leaving the default attention path. 'xformers' requires "
+            "CUDA and an importable xformers package; otherwise model load "
+            "fails fast."
+        ),
+    )
+    p.add_argument(
+        "--unpad-inputs",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "set unpad_inputs=True on the model config (default). Use "
+            "--no-unpad-inputs to disable; combinable with --attention=eager "
+            "for ablation against an older padded baseline."
+        ),
     )
 
     p.add_argument("--alias", nargs="*", default=None, help="filter to these aliases")
@@ -181,6 +221,7 @@ def _build_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         batch_size=args.batch_size,
         min_char_length=args.min_char_length,
         content_types=frozenset(args.content_type),
+        precision=args.precision,
     )
     return PipelineConfig(
         input_bucket=args.input_bucket,
@@ -290,7 +331,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         from impresso_text_embedder.model import load_model
 
-        model = load_model(name=args.model_name, revision=args.model_revision)
+        use_xformers = args.attention == "xformers"
+        model = load_model(
+            name=args.model_name,
+            revision=args.model_revision,
+            use_xformers=use_xformers,
+            unpad_inputs=args.unpad_inputs,
+        )
+        log.info(
+            "ablation toggles: precision=%s attention=%s unpad_inputs=%s",
+            args.precision,
+            args.attention,
+            args.unpad_inputs,
+        )
         if args.long_doc_strategy == "chunk":
             long_doc = _build_long_doc_config(args, model)
             cfg = dataclasses.replace(

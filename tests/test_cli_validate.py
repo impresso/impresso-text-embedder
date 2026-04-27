@@ -148,7 +148,7 @@ def test_parser_accepts_source_flags():
 def test_parser_source_default_is_none():
     args = validate_cli.build_parser().parse_args(["file.jsonl.bz2"])
     assert args.source is None
-    assert args.source_min_char_length == 400  # DEFAULT_SOURCE_MIN_CHAR_LENGTH
+    assert args.source_min_char_length == 800  # DEFAULT_SOURCE_MIN_CHAR_LENGTH
 
 
 def test_source_renders_panel_when_target_given(tmp_path, capsys):

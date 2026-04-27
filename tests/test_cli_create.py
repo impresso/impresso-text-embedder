@@ -160,7 +160,12 @@ def test_main_non_dry_run_loads_model():
             ]
         )
     assert rc == 0
-    lm.assert_called_once_with(name="Alibaba-NLP/gte-multilingual-base", revision="f7d567e")
+    lm.assert_called_once_with(
+        name="Alibaba-NLP/gte-multilingual-base",
+        revision="f7d567e",
+        use_xformers=True,
+        unpad_inputs=True,
+    )
     assert pp.call_args.kwargs["model"] is fake_model
 
 
@@ -335,6 +340,89 @@ def test_long_doc_chunk_wires_encoder_config():
     cfg = pp.call_args.kwargs["cfg"]
     assert cfg.encoder.long_doc is not None
     assert cfg.encoder.long_doc.strategy == "chunk"
+
+
+def test_parser_ablation_flags_defaults():
+    """Defaults preserve the historical fast path: bf16 + xformers + unpad."""
+    args = create_cli.build_parser().parse_args(
+        ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o"]
+    )
+    assert args.precision == "bf16"
+    assert args.attention == "xformers"
+    assert args.unpad_inputs is True
+
+
+def test_parser_ablation_flags_overrides():
+    """`--precision`, `--attention`, `--no-unpad-inputs` flip the toggles."""
+    args = create_cli.build_parser().parse_args(
+        [
+            "--provider",
+            "P",
+            "--input-bucket",
+            "i",
+            "--output-bucket",
+            "o",
+            "--precision",
+            "fp32",
+            "--attention",
+            "eager",
+            "--no-unpad-inputs",
+        ]
+    )
+    assert args.precision == "fp32"
+    assert args.attention == "eager"
+    assert args.unpad_inputs is False
+
+
+def test_build_pipeline_config_threads_precision():
+    """The `--precision` flag lands on the EncoderConfig."""
+    args = create_cli.build_parser().parse_args(
+        [
+            "--provider",
+            "P",
+            "--input-bucket",
+            "i",
+            "--output-bucket",
+            "o",
+            "--precision",
+            "fp32",
+        ]
+    )
+    cfg = create_cli._build_pipeline_config(args)
+    assert cfg.encoder.precision == "fp32"
+
+
+def test_main_threads_attention_and_unpad_into_load_model():
+    """The CLI passes resolved use_xformers/unpad_inputs as kwargs to load_model."""
+    fake_model = MagicMock()
+    with (
+        patch.object(
+            create_cli,
+            "process_provider",
+            return_value={"processed": 1, "skipped": 0, "files": ["k"]},
+        ),
+        patch.object(create_cli, "_load_env"),
+        patch("impresso_text_embedder.model.load_model", return_value=fake_model) as lm,
+    ):
+        rc = create_cli.main(
+            [
+                "--provider",
+                "P",
+                "--input-bucket",
+                "i",
+                "--output-bucket",
+                "o",
+                "--attention",
+                "eager",
+                "--no-unpad-inputs",
+                "--long-doc-strategy",
+                "truncate",
+            ]
+        )
+    assert rc == 0
+    kwargs = lm.call_args.kwargs
+    assert kwargs["use_xformers"] is False
+    assert kwargs["unpad_inputs"] is False
 
 
 def test_parser_log_flags_default_and_override(tmp_path):

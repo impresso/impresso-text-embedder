@@ -98,11 +98,14 @@ impresso-embed-create --provider SNL \
 | `--embedding-level`       | `text`                                          | `text` / `sentence` / `chunk`.                                        |
 | `--chunking-strategy`     | `semantic`                                      | Only used when `--embedding-level=chunk`.                             |
 | `--batch-size`            | *(auto, per GPU profile)*                       | A100=64, H100/H200=128, other CUDA=32, CPU=8.                         |
-| `--min-char-length`       | `400`                                           | Records with shorter reconstructed text are skipped.                  |
+| `--min-char-length`       | `800`                                           | Records with shorter reconstructed text are skipped.                  |
 | `--content-type`          | `ar`                                            | Keep only records whose `tp` is in this allow-list (`ar` / `page`).   |
 | `--long-doc-strategy`     | `chunk`                                         | `chunk` (split + aggregate) or `truncate` (legacy pre-step-16).       |
 | `--long-doc-chunk-tokens` | *(auto, tokenizer-derived)*                     | `model_max_length − num_special_tokens_to_add(pair=False)` (8190 for gte-multilingual-base). |
 | `--long-doc-aggregation`  | `mean`                                          | Only choice today.                                                    |
+| `--precision`             | `bf16`                                          | bf16 autocast on CUDA, or `fp32`. See [Numerical-ablation toggles](#numerical-ablation-toggles). |
+| `--attention`             | `xformers`                                      | xformers memory-efficient attention, or `eager`. See [Numerical-ablation toggles](#numerical-ablation-toggles). |
+| `--unpad-inputs`          | `True`                                          | Strip padding tokens before attention; `--no-unpad-inputs` disables. See [Numerical-ablation toggles](#numerical-ablation-toggles). |
 | `--alias`                 | *(none — all aliases)*                          | Filter to the listed aliases.                                         |
 | `--year-min`              | *(none)*                                        | Skip shards whose year is strictly below this.                        |
 | `--year-max`              | *(none)*                                        | Skip shards whose year is strictly above this.                        |
@@ -128,6 +131,26 @@ chunking registry, which only applies at `chunk` level.
 > [!NOTE]
 > `text` and `sentence` are *embedding levels*, not chunking strategies —
 > they do not appear in the chunking registry.
+
+### Numerical-ablation toggles
+
+Three flags expose the post-migration fast-path levers. Defaults preserve
+the historical fast path — running with no overrides reproduces today's
+outputs — but each can be flipped independently to bisect drift against
+an older baseline.
+
+| Flag                                  | Default     | What it controls                                                                                                                                                           | Reference                                                                                                                                                                     |
+| ------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--precision {bf16,fp32}`             | `bf16`      | Whether `model.encode()` runs inside a `torch.autocast(dtype=bfloat16)` scope on CUDA. `fp32` skips the autocast; model weights are fp32 either way.                       | [PyTorch blog — What every user should know about mixed precision training](https://pytorch.org/blog/what-every-user-should-know-about-mixed-precision-training-in-pytorch/) |
+| `--attention {xformers,eager}`        | `xformers`  | Whether `use_memory_efficient_attention=True` is set on the model config. Alibaba's modeling file then routes attention through `xformers.ops.memory_efficient_attention` (which dispatches to FA2 on Ampere, FA3 on Hopper). `eager` omits the flag and uses the model's default attention path. | [HuggingFace — Flash Attention (concept)](https://huggingface.co/docs/text-generation-inference/conceptual/flash_attention)                                                    |
+| `--unpad-inputs` / `--no-unpad-inputs`| `True`      | Whether `unpad_inputs=True` is set on the model config. The modeling file then strips padding tokens before attention so variable-length sequences don't waste FLOPs on PADs. | [HF blog — Packing with Flash Attention 2](https://huggingface.co/blog/packing-with-FA2)                                                                                      |
+
+> [!TIP]
+> Typical bisection grid against a legacy baseline: defaults / `--precision fp32` /
+> `--attention eager` / all three flipped. Whichever combination collapses
+> drift to ~zero identifies the responsible lever. `--attention=xformers`
+> with no CUDA device or no importable `xformers` package fails fast at model
+> load — no silent fallback.
 
 ## Validate an output file
 

@@ -61,7 +61,7 @@ class Mismatch:
         return f"{q}: cosine distance {d:.3e} > tol {tol:.0e}"
 
 
-DEFAULT_SOURCE_MIN_CHAR_LENGTH = 400
+DEFAULT_SOURCE_MIN_CHAR_LENGTH = 800
 DEFAULT_SAMPLE_EXCERPT_COUNT = 3
 DEFAULT_EXCERPT_CHARS = 80
 

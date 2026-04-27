@@ -154,12 +154,16 @@ class EncoderConfig:
     """Runtime config threaded through the per-record / batcher calls."""
 
     batch_size: int
-    min_char_length: int = 400
+    min_char_length: int = 800
     content_types: frozenset[str] = frozenset({"ar"})
     # Long-doc handling is opt-in and defaults to None; when None or
     # inactive, the text-level path encodes one-shot and trunc-by-tokenizer
     # applies (pre-step-16 behaviour). See :class:`LongDocConfig`.
     long_doc: LongDocConfig | None = None
+    # Encode-time numerical precision. ``"bf16"`` enables the
+    # ``torch.autocast`` scope around ``model.encode`` on CUDA; ``"fp32"``
+    # skips it. Default preserves the historical fast path.
+    precision: Literal["bf16", "fp32"] = "bf16"
 
 
 def build_embedder_tag(model_name: str, model_revision: str | None) -> str:
@@ -347,6 +351,7 @@ class TextBatcher:
             self._model,
             all_texts,
             batch_size=self._cfg.batch_size,
+            precision=self._cfg.precision,
         )
         ts = utc_timestamp()
         out: list[TextRecord] = []
@@ -436,6 +441,7 @@ def embed_sentence_record(
         model,
         texts,
         batch_size=cfg.batch_size,
+        precision=cfg.precision,
     )
 
     lg = record.get("lg")
@@ -502,6 +508,7 @@ def embed_chunk_record(
         model,
         texts,
         batch_size=cfg.batch_size,
+        precision=cfg.precision,
     )
 
     lg = record.get("lg")

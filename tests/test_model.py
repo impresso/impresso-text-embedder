@@ -66,6 +66,104 @@ class TestLoadModel:
             model_mod.load_model(device="cuda")
         assert fake_ctor.call_args.kwargs["device"] == "cuda"
 
+    def test_default_auto_detect_enables_both_on_cuda_with_xformers(self):
+        """Default ``None`` auto-detects → both flags enabled when CUDA + xformers."""
+        fake_ctor = MagicMock()
+        fake_instance = MagicMock()
+        fake_instance.__getitem__.return_value = _FakeNormalize()
+        fake_ctor.return_value = fake_instance
+
+        with (
+            patch.dict("sys.modules", _patched_st_modules(fake_ctor)),
+            patch.object(model_mod, "select_device", return_value="cuda"),
+            patch.object(model_mod, "has_xformers", return_value=True),
+        ):
+            model_mod.load_model(name="foo/bar", revision="abc")
+
+        assert fake_ctor.call_args.kwargs["config_kwargs"] == {
+            "unpad_inputs": True,
+            "use_memory_efficient_attention": True,
+        }
+
+    def test_default_auto_detect_disables_both_on_cpu(self):
+        """Default ``None`` on CPU silently disables both — preserves pre-toggle behaviour."""
+        fake_ctor = MagicMock()
+        fake_instance = MagicMock()
+        fake_instance.__getitem__.return_value = _FakeNormalize()
+        fake_ctor.return_value = fake_instance
+
+        with (
+            patch.dict("sys.modules", _patched_st_modules(fake_ctor)),
+            patch.object(model_mod, "select_device", return_value="cpu"),
+        ):
+            model_mod.load_model()
+
+        assert "config_kwargs" not in fake_ctor.call_args.kwargs
+
+    def test_disables_xformers_omits_attention_flag(self):
+        fake_ctor = MagicMock()
+        fake_instance = MagicMock()
+        fake_instance.__getitem__.return_value = _FakeNormalize()
+        fake_ctor.return_value = fake_instance
+
+        with (
+            patch.dict("sys.modules", _patched_st_modules(fake_ctor)),
+            patch.object(model_mod, "select_device", return_value="cuda"),
+            patch.object(model_mod, "has_xformers", return_value=True),
+        ):
+            model_mod.load_model(use_xformers=False)
+
+        assert fake_ctor.call_args.kwargs["config_kwargs"] == {"unpad_inputs": True}
+
+    def test_disables_unpad_omits_unpad_flag(self):
+        fake_ctor = MagicMock()
+        fake_instance = MagicMock()
+        fake_instance.__getitem__.return_value = _FakeNormalize()
+        fake_ctor.return_value = fake_instance
+
+        with (
+            patch.dict("sys.modules", _patched_st_modules(fake_ctor)),
+            patch.object(model_mod, "select_device", return_value="cuda"),
+            patch.object(model_mod, "has_xformers", return_value=True),
+        ):
+            model_mod.load_model(unpad_inputs=False)
+
+        assert fake_ctor.call_args.kwargs["config_kwargs"] == {
+            "use_memory_efficient_attention": True
+        }
+
+    def test_disables_both_omits_config_kwargs_entirely(self):
+        fake_ctor = MagicMock()
+        fake_instance = MagicMock()
+        fake_instance.__getitem__.return_value = _FakeNormalize()
+        fake_ctor.return_value = fake_instance
+
+        with (
+            patch.dict("sys.modules", _patched_st_modules(fake_ctor)),
+            patch.object(model_mod, "select_device", return_value="cuda"),
+            patch.object(model_mod, "has_xformers", return_value=True),
+        ):
+            model_mod.load_model(use_xformers=False, unpad_inputs=False)
+
+        assert "config_kwargs" not in fake_ctor.call_args.kwargs
+
+    def test_use_xformers_on_cpu_raises(self):
+        with (
+            patch.dict("sys.modules", _patched_st_modules(MagicMock())),
+            patch.object(model_mod, "select_device", return_value="cpu"),
+        ):
+            with pytest.raises(RuntimeError, match="CUDA"):
+                model_mod.load_model(use_xformers=True)
+
+    def test_use_xformers_without_xformers_package_raises(self):
+        with (
+            patch.dict("sys.modules", _patched_st_modules(MagicMock())),
+            patch.object(model_mod, "select_device", return_value="cuda"),
+            patch.object(model_mod, "has_xformers", return_value=False),
+        ):
+            with pytest.raises(RuntimeError, match="xformers"):
+                model_mod.load_model(use_xformers=True)
+
     def test_raises_when_last_module_is_not_normalize(self):
         fake_ctor = MagicMock()
         fake_instance = MagicMock()
@@ -139,6 +237,14 @@ class TestEncodeTexts:
         autocast_mock = MagicMock()
         with patch.object(torch, "autocast", autocast_mock):
             model_mod.encode_texts(m, ["x"], batch_size=1)
+        autocast_mock.assert_not_called()
+
+    def test_fp32_precision_skips_autocast_on_cuda(self):
+        """`precision='fp32'` skips the autocast scope even on CUDA."""
+        m = _mock_model_on("cuda", np.zeros((1, 2), dtype=np.float32))
+        autocast_mock = MagicMock()
+        with patch.object(torch, "autocast", autocast_mock):
+            model_mod.encode_texts(m, ["x"], batch_size=1, precision="fp32")
         autocast_mock.assert_not_called()
 
     def test_casts_float64_output_to_float32(self):
