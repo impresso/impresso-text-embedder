@@ -223,6 +223,96 @@ def test_above_tol_panel_renders(tmp_path, capsys):
     assert "FAIL" in out
 
 
+def test_kept_baseline_line_renders_in_panel(tmp_path, capsys):
+    a = tmp_path / "a.jsonl.bz2"
+    b = tmp_path / "b.jsonl.bz2"
+    source = tmp_path / "s.jsonl.bz2"
+    # k1 / k2 are kept (match exactly). y is missing in target.
+    _write(
+        a,
+        [
+            _text("k1", [1.0, 0.0]),
+            _text("k2", [1.0, 0.0]),
+            _text("y", [1.0, 0.0]),
+        ],
+    )
+    _write(b, [_text("k1", [1.0, 0.0]), _text("k2", [1.0, 0.0])])
+    _source(
+        source,
+        [
+            {"id": "k1", "tp": "ar", "lg": "fr", "ft": "x" * 1000},
+            {"id": "k2", "tp": "ar", "lg": "fr", "ft": "x" * 200},
+            {"id": "y", "tp": "ar", "lg": "fr", "ft": "y-content " * 40},
+        ],
+    )
+
+    rc = validate_cli.main([str(a), "--target", str(b), "--source", str(source)])
+    assert rc == 1
+    out = capsys.readouterr().out
+    # Comparison line shows kept count + min/mean/max next to the missing-set stats.
+    assert "vs kept" in out
+    assert "n=2" in out
+    assert "mean=" in out
+    # The per-set stats line picked up the "this set" qualifier and a mean.
+    assert "this set" in out
+
+
+def test_csv_out_writes_two_files(tmp_path, capsys):
+    a = tmp_path / "a.jsonl.bz2"
+    b = tmp_path / "b.jsonl.bz2"
+    source = tmp_path / "s.jsonl.bz2"
+    # x is above tolerance; y is missing in target.
+    _write(a, [_text("x", [1.0, 0.0]), _text("y", [1.0, 0.0])])
+    _write(b, [_text("x", [0.0, 1.0])])
+    _source(
+        source,
+        [
+            {"id": "x", "tp": "ar", "lg": "fr", "ft": "contenu de x " * 40},
+            {"id": "y", "tp": "ar", "lg": "fr", "ft": "contenu de y " * 40},
+        ],
+    )
+
+    out_dir = tmp_path / "csvs"
+    rc = validate_cli.main(
+        [
+            str(a),
+            "--target",
+            str(b),
+            "--source",
+            str(source),
+            "--csv-out",
+            str(out_dir),
+        ]
+    )
+    assert rc == 1
+
+    above_csv = out_dir / "above_threshold.csv"
+    missing_csv = out_dir / "missing.csv"
+    assert above_csv.exists() and missing_csv.exists()
+
+    import csv as _csv
+
+    with above_csv.open(encoding="utf-8", newline="") as fh:
+        above_rows = list(_csv.DictReader(fh))
+    with missing_csv.open(encoding="utf-8", newline="") as fh:
+        missing_rows = list(_csv.DictReader(fh))
+
+    assert len(above_rows) == 1
+    assert above_rows[0]["ci_id"] == "x"
+    assert above_rows[0]["url"] == "https://impresso-project.ch/app/article/x"
+    assert above_rows[0]["lg"] == "fr"
+
+    assert len(missing_rows) == 1
+    assert missing_rows[0]["ci_id"] == "y"
+    assert missing_rows[0]["direction"] == "missing_in_target"
+    assert missing_rows[0]["url"] == "https://impresso-project.ch/app/article/y"
+
+    captured_out = capsys.readouterr().out
+    assert "wrote " in captured_out
+    assert "above_threshold.csv" in captured_out
+    assert "missing.csv" in captured_out
+
+
 def test_source_empty_source_still_runs(tmp_path, capsys):
     # y is missing in target; source is empty → not_in_source drift signal.
     a = tmp_path / "a.jsonl.bz2"

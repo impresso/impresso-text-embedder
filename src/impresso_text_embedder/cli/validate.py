@@ -7,6 +7,7 @@ import logging
 import math
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from rich import box
 from rich.console import Console, Group
@@ -14,9 +15,11 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from impresso_text_embedder.csv_export import export_report_to_csv
 from impresso_text_embedder.validate import (
     DEFAULT_SOURCE_MIN_CHAR_LENGTH,
     DEFAULT_TOL,
+    CharLengthStats,
     Mismatch,
     MismatchKind,
     Sample,
@@ -71,6 +74,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="number of worst drifts to list (default: 10)",
+    )
+    p.add_argument(
+        "--csv-out",
+        type=Path,
+        default=None,
+        help=(
+            "write above_threshold.csv and missing.csv into this directory "
+            "(per-row Impresso article URL is included for click-through). "
+            "Source-derived columns (lg, tp, char_length, …) are populated "
+            "only when --source is also passed; otherwise blank."
+        ),
     )
     p.add_argument(
         "--show-all-missing",
@@ -327,7 +341,20 @@ def _source_block_distribution_table(
     return t
 
 
-def _render_source_stats_block(block: SourceStatsBlock, min_char_length: int) -> Panel:
+def _format_baseline_line(baseline: CharLengthStats) -> str | None:
+    if baseline.count == 0 or baseline.mean is None:
+        return None
+    return (
+        f"  vs kept (n={baseline.count})  min={baseline.min}  "
+        f"mean={baseline.mean:.0f}  max={baseline.max}"
+    )
+
+
+def _render_source_stats_block(
+    block: SourceStatsBlock,
+    min_char_length: int,
+    baseline: CharLengthStats | None = None,
+) -> Panel:
     label = _DIRECTION_LABELS[block.direction]
     title = f"source analysis — {label} ({block.total} records)"
 
@@ -335,12 +362,17 @@ def _render_source_stats_block(block: SourceStatsBlock, min_char_length: int) ->
 
     if block.char_lengths:
         sd = sorted(block.char_lengths)
+        mean = sum(sd) / len(sd)
         stats_line = (
-            f"char length  min={sd[0]}  p50={int(_percentile(sd, 0.5))}  "
-            f"p90={int(_percentile(sd, 0.9))}  p99={int(_percentile(sd, 0.99))}  "
-            f"max={sd[-1]}"
+            f"char length (this set, n={len(sd)})  min={sd[0]}  "
+            f"p50={int(_percentile(sd, 0.5))}  p90={int(_percentile(sd, 0.9))}  "
+            f"p99={int(_percentile(sd, 0.99))}  mean={mean:.0f}  max={sd[-1]}"
         )
         parts.append(Text(stats_line))
+        if baseline is not None:
+            line = _format_baseline_line(baseline)
+            if line is not None:
+                parts.append(Text(line))
         parts.append(Text("\n".join(_length_histogram(sd))))
 
     if block.lg_counts:
@@ -378,7 +410,11 @@ def _emit_source_stats(console: Console, analysis: SourceStatsAnalysis | None) -
         if block is None or block.total == 0:
             continue
         console.print()
-        console.print(_render_source_stats_block(block, analysis.min_char_length))
+        console.print(
+            _render_source_stats_block(
+                block, analysis.min_char_length, baseline=analysis.baseline
+            )
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -546,6 +582,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             target=None,
             console=console,
         )
+
+    if args.csv_out is not None:
+        above_path, missing_path = export_report_to_csv(report, args.csv_out)
+        print(f"wrote {above_path}")
+        print(f"wrote {missing_path}")
 
     return 0 if report.passed else 1
 

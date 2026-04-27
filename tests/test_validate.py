@@ -559,3 +559,114 @@ class TestSourceStatsValueDirection:
         ]
         out = v._value_distance_per_record(ms)
         assert out == {"a": 0.9, "b": 0.3}
+
+
+class TestCharLengthStats:
+    def test_add_tracks_min_mean_max(self):
+        s = v.CharLengthStats()
+        for length in (300, 100, 500, 200):
+            s.add(length)
+        assert s.count == 4
+        assert s.min == 100
+        assert s.max == 500
+        assert s.mean == pytest.approx(275.0)
+
+    def test_empty_returns_none_mean(self):
+        s = v.CharLengthStats()
+        assert s.count == 0
+        assert s.min is None
+        assert s.max is None
+        assert s.mean is None
+
+
+class TestComparedCiIds:
+    def test_text_level_populated_only_for_matched(self, tmp_path):
+        produced = tmp_path / "p.jsonl.bz2"
+        target = tmp_path / "t.jsonl.bz2"
+        _write_jsonl_bz2(
+            produced,
+            [_text_record("a", [1.0, 0.0]), _text_record("b", [1.0, 0.0])],
+        )
+        _write_jsonl_bz2(
+            target,
+            [_text_record("a", [1.0, 0.0]), _text_record("c", [1.0, 0.0])],
+        )
+        report = v.validate_against_target(produced, target)
+        # Only "a" exists on both sides; b and c go into missing buckets.
+        assert report.compared_ci_ids == {"a"}
+
+    def test_sentence_level_records_compared_only(self, tmp_path):
+        produced = tmp_path / "p.jsonl.bz2"
+        target = tmp_path / "t.jsonl.bz2"
+        _write_jsonl_bz2(
+            produced,
+            [
+                _sentence_record("ci-1", [(1, [1.0, 0.0]), (2, [1.0, 0.0])]),
+                _sentence_record("ci-2", [(1, [1.0, 0.0])]),
+            ],
+        )
+        _write_jsonl_bz2(
+            target,
+            [
+                _sentence_record("ci-1", [(1, [1.0, 0.0]), (2, [1.0, 0.0])]),
+            ],
+        )
+        report = v.validate_against_target(produced, target)
+        assert report.compared_ci_ids == {"ci-1"}
+
+
+class TestKeptBaseline:
+    def test_baseline_tallied_for_kept_records(self, tmp_path):
+        produced = tmp_path / "p.jsonl.bz2"
+        target = tmp_path / "t.jsonl.bz2"
+        # k1, k2 match exactly (kept). m1 is in produced only (missing in target).
+        _write_jsonl_bz2(
+            produced,
+            [
+                _text_record("k1", [1.0, 0.0]),
+                _text_record("k2", [1.0, 0.0]),
+                _text_record("m1", [1.0, 0.0]),
+            ],
+        )
+        _write_jsonl_bz2(
+            target,
+            [_text_record("k1", [1.0, 0.0]), _text_record("k2", [1.0, 0.0])],
+        )
+        # Source contains every record + an extra one filtered upstream.
+        source = tmp_path / "s.jsonl.bz2"
+        _write_jsonl_bz2(
+            source,
+            [
+                _source_record("k1", ft="x" * 1000),
+                _source_record("k2", ft="x" * 200),
+                _source_record("m1", ft="x" * 50),
+                _source_record("filtered", ft="x" * 9999),  # not in compared
+            ],
+        )
+
+        report = v.validate_against_target(produced, target)
+        analysis = v.collect_source_stats(source, report)
+
+        # Baseline contains exactly the two kept records — not m1, not the
+        # filtered record.
+        assert analysis.baseline.count == 2
+        assert analysis.baseline.min == 200
+        assert analysis.baseline.max == 1000
+        assert analysis.baseline.mean == pytest.approx(600.0)
+
+    def test_baseline_empty_when_no_kept_records(self, tmp_path):
+        produced = tmp_path / "p.jsonl.bz2"
+        target = tmp_path / "t.jsonl.bz2"
+        _write_jsonl_bz2(produced, [_text_record("a", [1.0, 0.0])])
+        _write_jsonl_bz2(target, [_text_record("b", [1.0, 0.0])])
+        source = tmp_path / "s.jsonl.bz2"
+        _write_jsonl_bz2(
+            source,
+            [_source_record("a", ft="x" * 50), _source_record("b", ft="x" * 50)],
+        )
+
+        report = v.validate_against_target(produced, target)
+        analysis = v.collect_source_stats(source, report)
+        # Both records are mismatches (missing on one side), neither kept.
+        assert analysis.baseline.count == 0
+        assert analysis.baseline.mean is None

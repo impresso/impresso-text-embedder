@@ -82,6 +82,18 @@ class Sample:
 
 
 @dataclass
+class SourceRecordStats:
+    """Per-record source metrics, keyed by ``ci_id`` inside a block."""
+
+    char_length: int
+    lg: str | None
+    tp: str | None
+    reconstructable: bool
+    empty: bool
+    below_min_char: bool
+
+
+@dataclass
 class SourceStatsBlock:
     """Source-backed diagnostics for one mismatch direction.
 
@@ -101,6 +113,34 @@ class SourceStatsBlock:
     lg_counts: Counter[str] = field(default_factory=Counter)
     tp_counts: Counter[str] = field(default_factory=Counter)
     samples: list[Sample] = field(default_factory=list)
+    records: dict[str, SourceRecordStats] = field(default_factory=dict)
+
+
+@dataclass
+class CharLengthStats:
+    """Streaming min / mean / max char length over a record set.
+
+    Used as the kept-records baseline so each missing/drifted panel can
+    show "vs kept (n=M) min=A mean=B max=C" — i.e. is the missing set
+    systematically shorter or longer than what made it through.
+    """
+
+    count: int = 0
+    total: int = 0
+    min: int | None = None
+    max: int | None = None
+
+    def add(self, length: int) -> None:
+        self.count += 1
+        self.total += length
+        self.min = length if self.min is None else min(self.min, length)
+        self.max = length if self.max is None else max(self.max, length)
+
+    @property
+    def mean(self) -> float | None:
+        if self.count == 0:
+            return None
+        return self.total / self.count
 
 
 @dataclass
@@ -109,6 +149,7 @@ class SourceStatsAnalysis:
 
     min_char_length: int = DEFAULT_SOURCE_MIN_CHAR_LENGTH
     blocks: dict[MismatchKind, SourceStatsBlock] = field(default_factory=dict)
+    baseline: CharLengthStats = field(default_factory=CharLengthStats)
 
 
 @dataclass
@@ -121,6 +162,11 @@ class ValidationReport:
     mismatches: list[Mismatch] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     source_stats: SourceStatsAnalysis | None = None
+    # ci_ids that had at least one comparison (text-level: simply matched on
+    # both sides; item-level: at least one item compared). Used by the
+    # source-stats layer to compute a "kept records" baseline so missing/
+    # drift panels can be read against it.
+    compared_ci_ids: set[str] = field(default_factory=set)
 
     @property
     def passed(self) -> bool:
@@ -386,6 +432,7 @@ def _compare_text(produced, expected, tol, report):
                 Mismatch(MismatchKind.VALUE, ci_id=rid, distance=d, tol=tol)
             )
         report.max_distance = max(report.max_distance, d)
+        report.compared_ci_ids.add(rid)
         report.records_checked += 1
         report.items_checked += 1
 
@@ -434,6 +481,7 @@ def _compare_items(produced, expected, tol, report, *, list_key, id_key):
         report.items_checked += 1
         seen_records.add(ci_id)
     report.records_checked = len(seen_records)
+    report.compared_ci_ids = seen_records
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +603,18 @@ def collect_source_stats(
     remaining = set(wanted)
     for raw in parse_records(iter_lines_from_path(source_path)):
         rid = _record_for_ci_id(raw)
-        if rid is None or rid not in lookup:
+        if rid is None:
             continue
+
+        if rid not in lookup:
+            # Kept-records baseline: any source record that was actually
+            # compared (matched on both sides during validation) and did
+            # not drift contributes to the comparison set. We need its
+            # char_length only — no samples, no lg/tp tally.
+            if rid in report.compared_ci_ids:
+                analysis.baseline.add(len(_reconstruct_text(raw)))
+            continue
+
         direction = lookup[rid]
         block = analysis.blocks[direction]
 
@@ -579,6 +637,15 @@ def collect_source_stats(
         tp = raw.get("tp") if isinstance(raw.get("tp"), str) else None
         block.tp_counts[tp or "(missing)"] += 1
 
+        block.records[rid] = SourceRecordStats(
+            char_length=length,
+            lg=lg,
+            tp=tp,
+            reconstructable=has_sents or has_ft,
+            empty=not (has_sents or has_ft),
+            below_min_char=length < min_char_length,
+        )
+
         excerpt = text[:excerpt_chars]
         if direction == MismatchKind.VALUE:
             value_candidates.append(
@@ -588,8 +655,10 @@ def collect_source_stats(
             block.samples.append(Sample(ci_id=rid, excerpt=excerpt))
 
         remaining.discard(rid)
-        if not remaining:
-            break
+        # NB: we used to early-break here when every mismatched id had
+        # been found. Now we keep scanning so the kept-records baseline
+        # covers the full source — the comparison line in each panel is
+        # only meaningful if it represents the entire kept set.
 
     # Top-N worst drifts for the VALUE panel. ``None`` distances (should
     # not happen in practice) sort to the end.
