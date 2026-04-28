@@ -24,6 +24,8 @@ dist/
 .venv/
 *.d/
 
+*.jsonl
+
 # HuggingFace cache (if user opts into local caching via HF_HOME=./hf.d)
 hf.d/
 
