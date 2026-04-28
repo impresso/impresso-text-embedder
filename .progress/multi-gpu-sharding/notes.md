@@ -53,6 +53,34 @@ Five candidate schemes:
 | Size-aware greedy (sort by `obj["Size"]` desc, drop into least-loaded bin) | Deferred | Best balance, but file size ≠ encode time (compression ratio + doc count both vary). Land round-robin first; revisit if measured shard-wallclock skew is >2× on real data. Adding `size` to `InputKey` is a 1-line change in `io.py:77–82` + `io.py:167`. |
 | Consistent hashing | ✗ | Solves elastic resharding with minimal data movement. Overkill — N is fixed for the run; we don't add/remove GPUs mid-job. |
 
+## Round-robin under monotonic file sizes (impresso data)
+
+Impresso file sizes grow roughly monotonically with year (later years
+have more content than early years), which is the *favourable* case for
+round-robin and tightens the size-vs-encode-time argument too:
+
+1. Round-robin is already decent on monotonic data — interleaving a
+   sorted sequence is a classic balanced-partition trick. With sizes
+   growing roughly monotonically and round-robin over the lex listing,
+   each shard gets a mix of early-tiny and late-fat files. Worst-case
+   ratio is bounded around 2× (vs. ~5× for chronological blocking).
+2. Size-weighted greedy is then strictly better and easy — sort desc,
+   drop each file into the currently-smallest shard. On monotonic data
+   this approaches 1× perfect balance. The "size-doesn't-track-encode-time"
+   worry I raised before is also weaker for you: same-newspaper-different-year
+   content is fairly homogeneous, so size, record count, and total chars
+   all correlate well.
+3. Cost is still zero S3 calls — `list_objects_v2` already returns `Size`.
+
+What this *doesn't* change: greedy bin-packing still loses the
+deterministic-re-submit property (assignments depend on the full set of
+sizes, so adding/removing a year reshuffles), and on the current cost
+model (RCP releases each GPU as the shard finishes; no idle-GPU bill)
+wallclock skew has no $-cost. So the analysis upgrades the *theoretical*
+case for greedy on impresso data but doesn't change the recommendation:
+keep round-robin until something downstream actually pushes back on
+end-to-end wallclock.
+
 ## Mechanism — where the shard filter lives
 
 `list_objects_v2` returns keys in [UTF-8 lexicographic

@@ -100,12 +100,30 @@ RCP_PVC          ?= dhlab-scratch
 RCP_SCRATCH_PATH ?= /rcp-scratch
 RUNAI_NODE_POOL  ?= default
 
-# Optional GPU product selector passed as `runai submit --node-type`. When
-# unset, Run:AI schedules on whatever GPU the node pool offers. Set it to
-# target a specific arch (e.g. RUNAI_GPU_TYPE=NVIDIA-H100-80GB). Exact
-# labels vary per cluster; confirm on RCP before relying on this.
+# Optional GPU product selector passed as `runai submit --node-type`. The
+# only way to distinguish H100 vs H200 — `--node-pools` names a pool
+# (default/h100/v100), not the product within it. When pinning to H100 or
+# H200, also set RUNAI_NODE_POOL=h100 so the scheduler restricts to that
+# pool. Exact labels are cluster-specific; find them with
+# `kubectl get nodes -L nvidia.com/gpu.product` on RCP. Examples:
+# RUNAI_GPU_TYPE=NVIDIA-H100-80GB-HBM3, RUNAI_GPU_TYPE=NVIDIA-H200-141GB.
+# Same image runs on A100 / H100 / H200; accel.py auto-detects the arch.
 RUNAI_GPU_TYPE   ?=
 RUNAI_GPU_TYPE_ARG := $(if $(RUNAI_GPU_TYPE),--node-type $(RUNAI_GPU_TYPE),)
+
+# Optional CPU/memory requests + limits. When unset, the namespace default
+# applies. Set CPU explicitly so the IO-overlap design (10-way S3 prefetch
+# + encode + upload) isn't starved on busy nodes. Memory: bf16 model + KV
+# cache + per-batch tokenization.
+RUNAI_CPU            ?=
+RUNAI_CPU_LIMIT      ?=
+RUNAI_MEMORY         ?=
+RUNAI_MEMORY_LIMIT   ?=
+RUNAI_CPU_ARG          := $(if $(RUNAI_CPU),--cpu $(RUNAI_CPU),)
+RUNAI_CPU_LIMIT_ARG    := $(if $(RUNAI_CPU_LIMIT),--cpu-limit $(RUNAI_CPU_LIMIT),)
+RUNAI_MEMORY_ARG       := $(if $(RUNAI_MEMORY),--memory $(RUNAI_MEMORY),)
+RUNAI_MEMORY_LIMIT_ARG := $(if $(RUNAI_MEMORY_LIMIT),--memory-limit $(RUNAI_MEMORY_LIMIT),)
+RUNAI_RESOURCE_ARGS    := $(RUNAI_CPU_ARG) $(RUNAI_CPU_LIMIT_ARG) $(RUNAI_MEMORY_ARG) $(RUNAI_MEMORY_LIMIT_ARG)
 
 # Multi-GPU horizontal sharding (step 18). Defaults reproduce the single-job
 # path: NUM_SHARDS=1 → no shard suffix in the job name; the CLI forwards
@@ -157,6 +175,7 @@ runai-submit-shard:
 	  --environment HF_HOME=$(HF_HOME_PVC) \
 	  --node-pools $(RUNAI_NODE_POOL) \
 	  $(RUNAI_GPU_TYPE_ARG) \
+	  $(RUNAI_RESOURCE_ARGS) \
 	  -- --provider $(PROVIDER) \
 	     --input-bucket $(INPUT_BUCKET) \
 	     --output-bucket $(OUTPUT_BUCKET) \
@@ -199,6 +218,7 @@ runai-interactive:
 	  --environment HF_HOME=$(HF_HOME_PVC) \
 	  --node-pools $(RUNAI_NODE_POOL) \
 	  $(RUNAI_GPU_TYPE_ARG) \
+	  $(RUNAI_RESOURCE_ARGS) \
 	  --command -- sleep infinity
 	@echo
 	@echo "Pod submitted. When Running:"
@@ -251,18 +271,25 @@ help:
 	@echo "    k8s-create-secret        S3 creds from .env"
 	@echo "    k8s-create-pull-secret   Harbor pull creds from .env"
 	@echo "  Run:AI:"
-	@echo "    runai-submit         PROVIDER=… INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS=…] [RUNAI_GPU_TYPE=…]"
+	@echo "    runai-submit         PROVIDER=… INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS=…] [RUNAI_GPU_TYPE=…] [RUNAI_NODE_POOL=…] [RUNAI_CPU=…] [RUNAI_MEMORY=…]"
 	@echo "    runai-submit-shard   …same as runai-submit, plus SHARD_INDEX=… NUM_SHARDS=… for one shard of an N-way partition"
-	@echo "    runai-submit-multi   PROVIDER=… NUM_SHARDS=N INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS=…]  Loops 0..N-1 submitting one job per shard"
-	@echo "    runai-interactive    Submit a debug pod (sleep infinity) [RUNAI_GPU_TYPE=…]"
+	@echo "    runai-submit-multi   PROVIDER=… NUM_SHARDS=N INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS=…] [RUNAI_GPU_TYPE=…] [RUNAI_CPU=…] [RUNAI_MEMORY=…]  Loops 0..N-1 submitting one job per shard"
+	@echo "    runai-interactive    Submit a debug pod (sleep infinity) [RUNAI_GPU_TYPE=…] [RUNAI_CPU=…] [RUNAI_MEMORY=…]"
 	@echo "    runai-bash           Shell into the debug pod"
 	@echo "    runai-delete-debug   Delete the debug pod"
 	@echo "  Local utilities:"
 	@echo "    s3-fetch             s3://… [TMP_DIR=tmp]  Download + bunzip2 one object"
 	@echo
-	@echo "  RUNAI_GPU_TYPE pins the GPU arch (e.g. NVIDIA-H100-80GB). Leave"
-	@echo "  unset to take whatever the node pool offers. Same image runs on"
-	@echo "  A100 and H100; the encoder auto-detects the arch at startup."
+	@echo "  GPU arch selection:"
+	@echo "    RUNAI_NODE_POOL  picks a pool — default (a100) | h100 | v100. H200 lives in the h100 pool."
+	@echo "    RUNAI_GPU_TYPE   pins the GPU product within the pool — the only way to split H100 vs H200."
+	@echo "                     Find labels: kubectl get nodes -L nvidia.com/gpu.product"
+	@echo "                     Examples: NVIDIA-H100-80GB-HBM3, NVIDIA-H200-141GB."
+	@echo "                     Leave unset to take whatever the pool offers. accel.py auto-detects A100/H100/H200."
+	@echo "  Resource requests:"
+	@echo "    RUNAI_CPU / RUNAI_CPU_LIMIT / RUNAI_MEMORY / RUNAI_MEMORY_LIMIT  passed to runai submit when set."
+	@echo "                     Set CPU so the 10-way S3 prefetch + encode + upload overlap isn't starved."
+	@echo "                     Reasonable starting point: RUNAI_CPU=8 RUNAI_MEMORY=32G."
 	@echo
 	@echo "  Model pin passed to runai-submit (override in .env.docker):"
 	@echo "    CREATOR_NAME=$(CREATOR_NAME) HF_MODEL_NAME=$(HF_MODEL_NAME) HF_MODEL_VERSION=$(HF_MODEL_VERSION)"

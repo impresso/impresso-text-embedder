@@ -283,6 +283,29 @@ CLI flags for `impresso-embed-create` go inside `EMBED_EXTRA_ARGS="…"`.
 `make help` lists every target. See [`.progress/docker-runai/`](./.progress/docker-runai/)
 for setup rationale and the secret conventions.
 
+### Picking the GPU and sizing the pod
+
+`RUNAI_NODE_POOL` picks the pool (`default` = A100, `h100`, `v100`).
+`RUNAI_GPU_TYPE` pins the GPU product *within* the pool — the only way to
+split H100 vs H200, since `--node-pools` doesn't distinguish them. Find the
+labels on RCP with `kubectl get nodes -L nvidia.com/gpu.product`. Same image
+runs on all three; `accel.py` auto-detects the arch at startup.
+
+`RUNAI_CPU` / `RUNAI_MEMORY` (with optional `RUNAI_CPU_LIMIT` /
+`RUNAI_MEMORY_LIMIT`) request resources explicitly so the 10-way S3
+prefetch + encode + upload overlap isn't starved by noisy neighbours.
+A reasonable starting point is `RUNAI_CPU=8 RUNAI_MEMORY=32G`; tune from
+the per-file `dl=…s enc=…s up=…s` postfix on the `tqdm` bar. Unset →
+namespace default applies.
+
+```bash
+make runai-submit PROVIDER=BNL \
+     INPUT_BUCKET=22-rebuilt-final \
+     OUTPUT_BUCKET=42-processed-data-final \
+     RUNAI_NODE_POOL=h100 RUNAI_GPU_TYPE=NVIDIA-H200-141GB \
+     RUNAI_CPU=8 RUNAI_MEMORY=32G
+```
+
 ### Multi-shard runs (horizontal throughput)
 
 Each Run:AI job owns one GPU. To process a provider in parallel across N
