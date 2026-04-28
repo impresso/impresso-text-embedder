@@ -524,3 +524,131 @@ def test_process_file_done_log_omits_skipped_when_clean(
     [done] = [r.message for r in caplog.records if r.message.startswith("done ")]
     assert "records=1" in done
     assert "skipped=" not in done
+
+
+# --- step 18: multi-gpu file-list sharding -----------------------------------
+
+
+def _mk_keys(n: int) -> list[s3io.InputKey]:
+    """Build N synthetic InputKeys in lexicographic key order."""
+    return [
+        s3io.InputKey("SNL", "EXP", 1900 + i, f"SNL/EXP/EXP-{1900 + i}.jsonl.bz2")
+        for i in range(n)
+    ]
+
+
+def test_apply_shard_filter_partition_is_disjoint_and_complete():
+    """Round-robin over N=4: union covers all, intersections are empty."""
+    keys = _mk_keys(23)
+    parts = [list(pl._apply_shard_filter(iter(keys), i, 4)) for i in range(4)]
+    # Each shard's keys agree with the modulo predicate.
+    for i, part in enumerate(parts):
+        for k in part:
+            assert keys.index(k) % 4 == i
+    # Union = original list (set comparison; order irrelevant).
+    union = set().union(*[set(p) for p in parts])
+    assert union == set(keys)
+    # Pairwise disjoint.
+    for i in range(4):
+        for j in range(i + 1, 4):
+            assert set(parts[i]).isdisjoint(parts[j])
+
+
+def test_apply_shard_filter_round_robin_indices():
+    """Shard 0 of 4 picks {0,4,8,…}, shard 1 picks {1,5,9,…}, etc."""
+    keys = _mk_keys(12)
+    assert list(pl._apply_shard_filter(iter(keys), 0, 4)) == [keys[0], keys[4], keys[8]]
+    assert list(pl._apply_shard_filter(iter(keys), 1, 4)) == [keys[1], keys[5], keys[9]]
+    assert list(pl._apply_shard_filter(iter(keys), 3, 4)) == [keys[3], keys[7], keys[11]]
+
+
+def test_apply_shard_filter_default_passthrough():
+    """num_shards=1 is a no-op — returns the original iterable identity."""
+    keys = _mk_keys(5)
+    out = pl._apply_shard_filter(keys, 0, 1)
+    assert out is keys  # not even wrapped
+
+
+def test_apply_shard_filter_zero_or_negative_is_passthrough():
+    """Defensive: bogus N (caught by CLI validation) does not crash here."""
+    keys = _mk_keys(5)
+    assert pl._apply_shard_filter(keys, 0, 0) is keys
+    assert pl._apply_shard_filter(keys, 0, -1) is keys
+
+
+def test_process_provider_emits_shard_manifest(monkeypatch, caplog):
+    """`shard i/N: K files, first=… last=…` INFO line at startup when N>1."""
+    keys = _mk_keys(8)
+    monkeypatch.setattr(s3io, "list_input_keys", lambda **_: iter(keys))
+    monkeypatch.setattr(s3io, "head_last_modified", lambda b, k: None)
+    cfg = pl.PipelineConfig(
+        input_bucket="i",
+        output_bucket="o",
+        input_prefix="",
+        model_name="Alibaba-NLP/gte-multilingual-base",
+        model_revision=None,
+        level="text",
+        chunking_strategy_name="semantic",
+        force=True,  # bypass skip-check entirely; we don't actually run the encode loop
+        encoder=em.EncoderConfig(
+            batch_size=2, min_char_length=5, content_types=frozenset({"ar"})
+        ),
+        shard_index=2,
+        num_shards=4,
+    )
+    # Stub the real pipeline body so we never actually download/encode/upload.
+    # `process_provider` returns early after the manifest line if to_process is
+    # falsy — but with force=True every key lands in to_process. Patch the
+    # encode/upload helpers to no-ops so the loop is a no-op too.
+    monkeypatch.setattr(pl, "_encode_to_local", lambda *a, **k: (0, {}))
+    monkeypatch.setattr(s3io, "download_to_local", lambda *a, **k: None)
+    monkeypatch.setattr(s3io, "upload_local_file", lambda *a, **k: None)
+
+    with caplog.at_level("INFO", logger="impresso_text_embedder.pipeline"):
+        pl.process_provider("SNL", MagicMock(), cfg)
+
+    [manifest] = [r.message for r in caplog.records if r.message.startswith("shard ")]
+    # Round-robin: shard 2 of 4 from 8 keys → indices 2 and 6 (years 1902, 1906).
+    assert "shard 2/4: 2 files" in manifest
+    assert "first=SNL/EXP/EXP-1902.jsonl.bz2" in manifest
+    assert "last=SNL/EXP/EXP-1906.jsonl.bz2" in manifest
+
+
+def test_process_provider_no_manifest_when_unsharded(monkeypatch, caplog):
+    """Default num_shards=1 → no `shard …` log line (unchanged behaviour)."""
+    monkeypatch.setattr(s3io, "list_input_keys", lambda **_: iter(_mk_keys(3)))
+    monkeypatch.setattr(s3io, "head_last_modified", lambda b, k: None)
+    monkeypatch.setattr(pl, "_encode_to_local", lambda *a, **k: (0, {}))
+    monkeypatch.setattr(s3io, "download_to_local", lambda *a, **k: None)
+    monkeypatch.setattr(s3io, "upload_local_file", lambda *a, **k: None)
+    with caplog.at_level("INFO", logger="impresso_text_embedder.pipeline"):
+        pl.process_provider("SNL", MagicMock(), _cfg(force=True))
+    assert not any(r.message.startswith("shard ") for r in caplog.records)
+
+
+def test_process_provider_empty_shard_logs_no_work(monkeypatch, caplog):
+    """An empty shard (filter yields zero keys) logs `0 files (no work)`."""
+    # 3 keys, sharded into 4 partitions → shard 3 ends up empty.
+    keys = _mk_keys(3)
+    monkeypatch.setattr(s3io, "list_input_keys", lambda **_: iter(keys))
+    monkeypatch.setattr(s3io, "head_last_modified", lambda b, k: None)
+    cfg = pl.PipelineConfig(
+        input_bucket="i",
+        output_bucket="o",
+        input_prefix="",
+        model_name="Alibaba-NLP/gte-multilingual-base",
+        model_revision=None,
+        level="text",
+        chunking_strategy_name="semantic",
+        force=True,
+        encoder=em.EncoderConfig(
+            batch_size=2, min_char_length=5, content_types=frozenset({"ar"})
+        ),
+        shard_index=3,
+        num_shards=4,
+    )
+    with caplog.at_level("INFO", logger="impresso_text_embedder.pipeline"):
+        summary = pl.process_provider("SNL", MagicMock(), cfg)
+    assert summary["processed"] == 0
+    [manifest] = [r.message for r in caplog.records if r.message.startswith("shard ")]
+    assert manifest == "shard 3/4: 0 files (no work)"

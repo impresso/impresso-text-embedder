@@ -107,8 +107,18 @@ RUNAI_NODE_POOL  ?= default
 RUNAI_GPU_TYPE   ?=
 RUNAI_GPU_TYPE_ARG := $(if $(RUNAI_GPU_TYPE),--node-type $(RUNAI_GPU_TYPE),)
 
-# Per-job naming. PROVIDER must be set on the command line.
-RUNAI_JOB_NAME ?= embed-$(shell echo $(PROVIDER) | tr '[:upper:]' '[:lower:]')
+# Multi-GPU horizontal sharding (step 18). Defaults reproduce the single-job
+# path: NUM_SHARDS=1 → no shard suffix in the job name; the CLI forwards
+# --shard-index 0 --num-shards 1 which is a no-op partition. Override to
+# run one shard of an N-way partition.
+SHARD_INDEX ?= 0
+NUM_SHARDS  ?= 1
+RUNAI_JOB_SUFFIX := $(if $(filter-out 1,$(NUM_SHARDS)),-shard-$(SHARD_INDEX)-of-$(NUM_SHARDS),)
+
+# Per-job naming. PROVIDER must be set on the command line. When NUM_SHARDS>1
+# the suffix `-shard-i-of-N` is appended so concurrent shards land in
+# distinct runai jobs.
+RUNAI_JOB_NAME ?= embed-$(shell echo $(PROVIDER) | tr '[:upper:]' '[:lower:]')$(RUNAI_JOB_SUFFIX)
 
 # Required at runtime.
 INPUT_BUCKET  ?=
@@ -121,11 +131,17 @@ HF_HOME_PVC ?= $(RCP_SCRATCH_PATH)/$(LDAP_USERNAME)/.cache/hf
 # to impresso-embed-create. Use this for --embedding-level, --batch-size, etc.
 EMBED_EXTRA_ARGS ?=
 
-# Submit a one-shot job for one provider.
+# Submit a one-shot job for one provider. Alias for `runai-submit-shard`
+# with the default SHARD_INDEX=0 NUM_SHARDS=1 (i.e. no sharding).
 # Usage: make runai-submit PROVIDER=BNL INPUT_BUCKET=22-rebuilt-final OUTPUT_BUCKET=42-processed-data-final
 # Pass make variables as NAME=value, not --name=value — make eats anything starting with `--`.
 # Forward CLI flags to impresso-embed-create via EMBED_EXTRA_ARGS="--batch-size 128 --force".
-runai-submit:
+runai-submit: runai-submit-shard
+
+# Submit one shard of an N-way partition. SHARD_INDEX and NUM_SHARDS default
+# to 0/1 (no sharding) so this is also the canonical body for `runai-submit`.
+# Usage: make runai-submit-shard PROVIDER=BNL INPUT_BUCKET=… OUTPUT_BUCKET=… SHARD_INDEX=2 NUM_SHARDS=4
+runai-submit-shard:
 	@test -n "$(PROVIDER)"      || { echo "PROVIDER is required";      exit 1; }
 	@test -n "$(INPUT_BUCKET)"  || { echo "INPUT_BUCKET is required";  exit 1; }
 	@test -n "$(OUTPUT_BUCKET)" || { echo "OUTPUT_BUCKET is required"; exit 1; }
@@ -144,9 +160,25 @@ runai-submit:
 	  -- --provider $(PROVIDER) \
 	     --input-bucket $(INPUT_BUCKET) \
 	     --output-bucket $(OUTPUT_BUCKET) \
+	     --shard-index $(SHARD_INDEX) \
+	     --num-shards $(NUM_SHARDS) \
 	     --model-name $(CREATOR_NAME)/$(HF_MODEL_NAME) \
 	     --model-revision $(HF_MODEL_VERSION) \
 	     $(EMBED_EXTRA_ARGS)
+
+# Submit N independent runai jobs, each owning shard i of N. Each job runs
+# on one GPU; the cluster scheduler decides node placement. Re-running with
+# the same NUM_SHARDS is idempotent thanks to --skip-if-s3-exists +
+# the input-newer-than-output check. EMBED_EXTRA_ARGS is forwarded to every
+# shard, so flags like --batch-size or --embedding-level apply uniformly.
+# Usage: make runai-submit-multi PROVIDER=BNL NUM_SHARDS=4 INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS="--embedding-level text --batch-size 64"]
+runai-submit-multi:
+	@test -n "$(NUM_SHARDS)" || { echo "NUM_SHARDS is required"; exit 1; }
+	@test "$(NUM_SHARDS)" -ge 2 || { echo "NUM_SHARDS must be >= 2 (got $(NUM_SHARDS)); use runai-submit for N=1"; exit 1; }
+	@for i in $$(seq 0 $$(($(NUM_SHARDS) - 1))); do \
+	    echo "==> Submitting shard $$i / $(NUM_SHARDS)"; \
+	    $(MAKE) runai-submit-shard SHARD_INDEX=$$i EMBED_EXTRA_ARGS='$(EMBED_EXTRA_ARGS)'; \
+	done
 
 # Interactive debug pod: overrides the entrypoint with `sleep infinity` so
 # you can shell in and check PVC mount, secrets, GPU, model cache, etc.
@@ -220,6 +252,8 @@ help:
 	@echo "    k8s-create-pull-secret   Harbor pull creds from .env"
 	@echo "  Run:AI:"
 	@echo "    runai-submit         PROVIDER=… INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS=…] [RUNAI_GPU_TYPE=…]"
+	@echo "    runai-submit-shard   …same as runai-submit, plus SHARD_INDEX=… NUM_SHARDS=… for one shard of an N-way partition"
+	@echo "    runai-submit-multi   PROVIDER=… NUM_SHARDS=N INPUT_BUCKET=… OUTPUT_BUCKET=… [EMBED_EXTRA_ARGS=…]  Loops 0..N-1 submitting one job per shard"
 	@echo "    runai-interactive    Submit a debug pod (sleep infinity) [RUNAI_GPU_TYPE=…]"
 	@echo "    runai-bash           Shell into the debug pod"
 	@echo "    runai-delete-debug   Delete the debug pod"
@@ -241,5 +275,6 @@ help:
 .PHONY: help \
         docker-login docker-build docker-build-push docker-push \
         k8s-create-secrets k8s-create-secret k8s-create-pull-secret \
-        runai-submit runai-interactive runai-bash runai-delete-debug \
+        runai-submit runai-submit-shard runai-submit-multi \
+        runai-interactive runai-bash runai-delete-debug \
         s3-fetch

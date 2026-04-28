@@ -78,6 +78,21 @@ class PipelineConfig:
     chunking_strategy_name: str
     force: bool
     encoder: EncoderConfig
+    shard_index: int = 0
+    num_shards: int = 1
+
+
+def _apply_shard_filter(
+    listing: Iterable[s3io.InputKey], shard_index: int, num_shards: int
+) -> Iterable[s3io.InputKey]:
+    """Round-robin filter over a deterministic listing.
+
+    Relies on ``list_objects_v2``'s UTF-8 lexicographic order (AWS S3 +
+    Ceph RadosGW) — no explicit sort. No-op when ``num_shards == 1``.
+    """
+    if num_shards <= 1:
+        return listing
+    return (k for i, k in enumerate(listing) if i % num_shards == shard_index)
 
 
 def _iter_parsed(lines: Iterable[str]) -> Iterator[dict]:
@@ -197,7 +212,7 @@ def process_file(
     if not cfg.force:
         skip, reason = _should_skip(input_key, cfg.output_bucket, output_key)
         if skip:
-            log.info(
+            log.debug(
                 "skip s3://%s/%s (%s; pass --force to overwrite)",
                 cfg.output_bucket,
                 output_key,
@@ -275,6 +290,7 @@ def _plan_files(
         year_min=year_min,
         year_max=year_max,
     )
+    listing = _apply_shard_filter(listing, cfg.shard_index, cfg.num_shards)
     if limit is not None:
         log.info("limit=%d applied; listing truncated", limit)
         listing = itertools.islice(listing, limit)
@@ -287,7 +303,7 @@ def _plan_files(
             continue
         skip, reason = _should_skip(input_key, cfg.output_bucket, output_key)
         if skip:
-            log.info(
+            log.debug(
                 "skip s3://%s/%s (%s; pass --force to overwrite)",
                 cfg.output_bucket,
                 output_key,
@@ -321,6 +337,7 @@ def _dry_run_summary(
         year_min=year_min,
         year_max=year_max,
     )
+    listing = _apply_shard_filter(listing, cfg.shard_index, cfg.num_shards)
     if limit is not None:
         log.info("limit=%d applied; listing truncated", limit)
         listing = itertools.islice(listing, limit)
@@ -371,6 +388,18 @@ def process_provider(
     to_process, skipped_keys = _plan_files(
         provider, cfg, alias_filter, year_min, year_max, limit
     )
+    if cfg.num_shards > 1:
+        if to_process:
+            log.info(
+                "shard %d/%d: %d files, first=%s last=%s",
+                cfg.shard_index, cfg.num_shards, len(to_process),
+                to_process[0][0].key, to_process[-1][0].key,
+            )
+        else:
+            log.info(
+                "shard %d/%d: 0 files (no work)",
+                cfg.shard_index, cfg.num_shards,
+            )
     log.info(
         "planned: provider=%s to_process=%d already_done=%d",
         provider, len(to_process), len(skipped_keys),

@@ -87,35 +87,70 @@ impresso-embed-create --provider SNL \
 
 ### Argument defaults
 
-| Flag                      | Default                                         | Notes                                                                 |
-| ------------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
-| `--provider`              | *(required)*                                    | Provider code, e.g. `SNL`.                                            |
-| `--input-bucket`          | `122-rebuilt-final`                             | S3 bucket holding `<provider>/<alias>/*.jsonl.bz2`.                   |
-| `--output-bucket`         | `140-processed-data-sandbox`                    | Outputs mirror input under `embeddings/docs/<model-slug>/`.           |
-| `--input-prefix`          | `""`                                            | Optional prefix inside the input bucket.                              |
-| `--model-name`            | `Alibaba-NLP/gte-multilingual-base`             | HuggingFace model id.                                                 |
-| `--model-revision`        | `f7d567e`                                       | HF commit pin; not appended to the output slug.                       |
-| `--embedding-level`       | `text`                                          | `text` / `sentence` / `chunk`.                                        |
-| `--chunking-strategy`     | `semantic`                                      | Only used when `--embedding-level=chunk`.                             |
-| `--batch-size`            | *(auto, per GPU profile)*                       | A100=64, H100/H200=128, other CUDA=32, CPU=8.                         |
-| `--min-char-length`       | `800`                                           | Records with shorter reconstructed text are skipped.                  |
-| `--content-type`          | `ar`                                            | Keep only records whose `tp` is in this allow-list (`ar` / `page`).   |
-| `--long-doc-strategy`     | `chunk`                                         | `chunk` (split + aggregate) or `truncate` (legacy pre-step-16).       |
-| `--long-doc-chunk-tokens` | *(auto, tokenizer-derived)*                     | `model_max_length − num_special_tokens_to_add(pair=False)` (8190 for gte-multilingual-base). |
-| `--long-doc-aggregation`  | `mean`                                          | Only choice today.                                                    |
-| `--precision`             | `bf16`                                          | bf16 autocast on CUDA, or `fp32`. See [Numerical-ablation toggles](#numerical-ablation-toggles). |
-| `--attention`             | `xformers`                                      | xformers memory-efficient attention, or `eager`. See [Numerical-ablation toggles](#numerical-ablation-toggles). |
-| `--unpad-inputs`          | `True`                                          | Strip padding tokens before attention; `--no-unpad-inputs` disables. See [Numerical-ablation toggles](#numerical-ablation-toggles). |
-| `--alias`                 | *(none — all aliases)*                          | Filter to the listed aliases.                                         |
-| `--year-min`              | *(none)*                                        | Skip shards whose year is strictly below this.                        |
-| `--year-max`              | *(none)*                                        | Skip shards whose year is strictly above this.                        |
-| `--force`                 | `False`                                         | Reprocess even if output exists on S3.                                |
-| `--dry-run`               | `False`                                         | List files without loading the model or writing outputs.              |
-| `--limit`                 | *(none)*                                        | Process at most the first N listed shards (applied before skip-check). |
-| `--log-level-file`        | `INFO`                                          | `DEBUG` / `INFO` / `WARNING` / `ERROR`.                               |
-| `--log-dir`               | `/rcp-scratch/<user>/experiments/embeddings`    | Full path becomes `<log-dir>/<YYYY-MM-DD>/<provider>.log`.            |
+Run `impresso-embed-create --help` for the flat list.
 
-Run `impresso-embed-create --help` for per-flag descriptions.
+<details>
+<summary>Grouped reference (click to expand)</summary>
+
+#### Selection — what to process
+
+| Flag                          | Default                       | Notes                                                                  |
+| ----------------------------- | ----------------------------- | ---------------------------------------------------------------------- |
+| `--provider`                  | *required*                    | Provider code, e.g. `SNL`.                                             |
+| `--alias` *(repeatable)*      | *all aliases*                 | Filter to the listed aliases.                                          |
+| `--year-min` / `--year-max`   | *no bound*                    | Skip shards outside this inclusive year range.                         |
+| `--limit`                     | *none*                        | Process at most the first N shards (lex S3 order, before skip-check).  |
+| `--input-bucket`              | `122-rebuilt-final`           | Holds `<provider>/<alias>/*.jsonl.bz2`.                                |
+| `--output-bucket`             | `140-processed-data-sandbox`  | Outputs mirror input under `embeddings/docs/<model-slug>/`.            |
+| `--input-prefix`              | `""`                          | Optional prefix inside the input bucket.                               |
+
+#### Model & output shape
+
+| Flag                  | Default                              | Notes                                              |
+| --------------------- | ------------------------------------ | -------------------------------------------------- |
+| `--model-name`        | `Alibaba-NLP/gte-multilingual-base`  | HuggingFace model id.                              |
+| `--model-revision`    | `f7d567e`                            | HF commit pin; not appended to the output slug.    |
+| `--embedding-level`   | `text`                               | `text` / `sentence` / `chunk`.                     |
+| `--chunking-strategy` | `semantic`                           | Used only when `--embedding-level=chunk`.          |
+
+#### Record filtering
+
+| Flag                | Default | Notes                                                                |
+| ------------------- | ------- | -------------------------------------------------------------------- |
+| `--min-char-length` | `800`   | Skip records whose reconstructed text is shorter.                    |
+| `--content-type`    | `ar`    | Keep only records whose `tp` is in this allow-list (`ar` / `page`).  |
+
+#### Long-document handling
+
+| Flag                      | Default                       | Notes                                                                                        |
+| ------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| `--long-doc-strategy`     | `chunk`                       | `chunk` (split + aggregate) or `truncate` (legacy pre-step-16).                              |
+| `--long-doc-chunk-tokens` | *auto, tokenizer-derived*     | `model_max_length − num_special_tokens_to_add(pair=False)` (8190 for gte-multilingual-base). |
+| `--long-doc-aggregation`  | `mean`                        | Only choice today.                                                                           |
+
+#### Performance / GPU
+
+| Flag                                            | Default                       | Notes                                                                                        |
+| ----------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| `--batch-size`                                  | *auto, per GPU profile*       | A100=64, H100/H200=128, other CUDA=32, CPU=8.                                                |
+| `--precision`, `--attention`, `--unpad-inputs`  | bf16 / xformers / on          | Numerical-ablation levers — see [Numerical-ablation toggles](#numerical-ablation-toggles).   |
+
+#### Sharding & run modes
+
+| Flag                            | Default | Notes                                                                                       |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
+| `--shard-index` / `--num-shards`| `0` / `1` | Round-robin partition over `list_objects_v2` lex order. See [Multi-shard runs](#multi-shard-runs-horizontal-throughput). |
+| `--force`                       | `False` | Reprocess even if output exists on S3.                                                      |
+| `--dry-run`                     | `False` | List files; no model load, no writes.                                                       |
+
+#### Logging
+
+| Flag                | Default                                       | Notes                                                                                       |
+| ------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `--log-level-file`  | `INFO`                                        | `DEBUG` / `INFO` / `WARNING` / `ERROR`.                                                     |
+| `--log-dir`         | `/rcp-scratch/<user>/experiments/embeddings`  | Full path: `<log-dir>/<YYYY-MM-DD>/<provider>.log` (or `<provider>-shard-<i>-of-<N>.log` when `--num-shards` > 1). |
+
+</details>
 
 ### Embedding levels
 
@@ -190,39 +225,21 @@ See the *"Validate — source-backed diagnostics"* decision in
 
 ### Export to CSV
 
-Add `--csv-out <dir>` to dump two machine-readable lists alongside the
-Rich panels — useful when triaging many mismatches in a spreadsheet or
-piping them to follow-up tooling:
+`--csv-out <dir>` dumps mismatches as spreadsheet-friendly CSVs alongside the Rich panels:
 
 ```bash
-impresso-embed-validate \
-  s3://<bucket>/.../EXP-1912.jsonl.bz2 \
-  --target s3://<bucket>/golden/EXP-1912.jsonl.bz2 \
-  --source s3://<bucket>/inputs/EXP-1912.jsonl.bz2 \
+impresso-embed-validate s3://.../EXP-1912.jsonl.bz2 \
+  --target s3://.../golden/EXP-1912.jsonl.bz2 \
+  --source s3://.../inputs/EXP-1912.jsonl.bz2 \
   --csv-out ./out
 ```
 
-This writes:
+| File                  | One row per                              | Columns                                                |
+| --------------------- | ---------------------------------------- | ------------------------------------------------------ |
+| `above_threshold.csv` | record whose cosine distance > `--tol`   | `ci_id, url, distance, lg, tp, char_length`            |
+| `missing.csv`         | record present on only one side          | `ci_id, url, direction, lg, tp, char_length`           |
 
-- `./out/above_threshold.csv` — one row per record whose cosine
-  distance exceeded `--tol`. Columns: `ci_id, url, distance, lg, tp,
-  char_length`.
-- `./out/missing.csv` — one row per record present on only one side.
-  Columns: `ci_id, url, direction, lg, tp, char_length`. The
-  `direction` column is `missing_in_target` or `missing_in_produced`.
-
-For sentence/chunk-level runs, `item_id` and `id_key` are appended at
-the end of each row so per-item drifts can still be triaged. The `url`
-column links each row to the Impresso web app
-(`https://impresso-project.ch/app/article/{ci_id}`) so reviewers can
-open the article in one click. Source-derived columns (`lg`, `tp`,
-`char_length`) are populated only when `--source` is also supplied;
-otherwise they are left blank. Aggregate diagnostics
-(`reconstructable` / `empty` / `below_min_char` counts, char-length
-distribution, language and content-type breakdowns) live in the
-source-stats panel printed to stdout, not in the CSV rows.
-
-Exit code is `0` on pass, non-zero on failure.
+`url` links to the Impresso web app. `lg` / `tp` / `char_length` are populated only with `--source`; sentence/chunk runs append `item_id, id_key`. Exit code is `0` on pass, non-zero on failure.
 
 ## Logging
 
@@ -265,6 +282,35 @@ CLI flags for `impresso-embed-create` go inside `EMBED_EXTRA_ARGS="…"`.
 
 `make help` lists every target. See [`.progress/docker-runai/`](./.progress/docker-runai/)
 for setup rationale and the secret conventions.
+
+### Multi-shard runs (horizontal throughput)
+
+Each Run:AI job owns one GPU. To process a provider in parallel across N
+GPUs, submit N independent jobs with disjoint file partitions:
+
+```bash
+make runai-submit-multi PROVIDER=BNL NUM_SHARDS=4 \
+     INPUT_BUCKET=22-rebuilt-final \
+     OUTPUT_BUCKET=42-processed-data-final \
+     EMBED_EXTRA_ARGS="--embedding-level text --batch-size 64"
+```
+
+`EMBED_EXTRA_ARGS` is forwarded to every shard so flags apply uniformly.
+This loops `i` from 0 to N-1 and submits a separate job for each shard.
+Each job runs `impresso-embed-create --shard-index i --num-shards N` and
+processes a round-robin partition of the file list (over
+`list_objects_v2`'s lexicographic order — deterministic, no coordination).
+Failed shards re-run idempotently via the existing
+`--skip-if-s3-exists` + input-newer-than-output check; just resubmit the
+same shard. Per-shard logs land at
+`<log-dir>/<YYYY-MM-DD>/<provider>-shard-<i>-of-<N>.log` so concurrent
+shards don't stomp each other.
+
+`make runai-submit-shard PROVIDER=BNL SHARD_INDEX=2 NUM_SHARDS=4` submits
+just one shard (handy for re-running a single failed shard). Defaults
+`SHARD_INDEX=0 NUM_SHARDS=1` reproduce the unsharded `runai-submit`
+behaviour. Design rationale and rejected alternatives in
+[`.progress/multi-gpu-sharding/`](./.progress/multi-gpu-sharding/).
 
 ### Interactive debug shell
 

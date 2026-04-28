@@ -48,6 +48,8 @@ def _resolve_log_path(
     provider: str,
     log_dir: Path | None,
     now: datetime | None = None,
+    shard_index: int | None = None,
+    num_shards: int | None = None,
 ) -> Path:
     """Return the full log-file path; fail fast if the default base is missing.
 
@@ -57,11 +59,16 @@ def _resolve_log_path(
     the common failure mode). Otherwise ``log_dir`` is used verbatim as the
     base; its parents are created if missing.
 
-    The date component is ``YYYY-MM-DD`` (UTC) and the filename is
-    ``<provider>.log``.
+    The date component is ``YYYY-MM-DD`` (UTC). Filename is ``<provider>.log``
+    by default; when ``num_shards`` is greater than 1 it becomes
+    ``<provider>-shard-<i>-of-<N>.log`` so concurrent shards don't overwrite
+    each other's logs (step 18, multi-gpu-sharding).
     """
     date_str = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
-    filename = f"{provider}.log"
+    if num_shards is not None and num_shards > 1:
+        filename = f"{provider}-shard-{shard_index}-of-{num_shards}.log"
+    else:
+        filename = f"{provider}.log"
 
     if log_dir is None:
         if not DEFAULT_RCP_SCRATCH.is_dir():
@@ -101,13 +108,17 @@ def configure_logging(
     provider: str,
     log_dir: Path | None = None,
     log_level_file: str = "INFO",
+    shard_index: int | None = None,
+    num_shards: int | None = None,
 ) -> Path:
     """Install the file + tqdm-ERROR handlers on the root logger.
 
     Returns the resolved log-file path so the caller can print it on
     startup.
     """
-    path = _resolve_log_path(provider, log_dir)
+    path = _resolve_log_path(
+        provider, log_dir, shard_index=shard_index, num_shards=num_shards
+    )
 
     root = logging.getLogger()
     # Drop any prior handlers so re-invoking (e.g. in tests) is clean.

@@ -39,6 +39,7 @@ Statuses: `done` · `partial` · `wip` · `todo` · `deferred`.
 | 15 | [structured-logging](#15-structured-logging)              | `done`     | [`structured-logging/`](./structured-logging/)                |
 | 16 | [long-doc-chunking](#16-long-doc-chunking)                | `partial`  | [`long-doc-chunking/`](./long-doc-chunking/)                  |
 | 17 | [validate-source-stats](#17-validate-source-stats)        | `done`     | [`validate-source-stats/`](./validate-source-stats/)          |
+| 18 | [multi-gpu-sharding](#18-multi-gpu-sharding)              | `done`     | [`multi-gpu-sharding/`](./multi-gpu-sharding/)                |
 
 ## Currently active
 
@@ -59,6 +60,9 @@ Per-step acceptance items that require live measurement, not code:
   recall vs. the truncate baseline.
 - **Step 17**: per-`lg` / per-`tp` mean-drift breakdowns inside the
   VALUE panel; drift-vs-length correlation; `--source-samples N` flag.
+- **Step 18**: 4-shard real-RCP run on the largest provider; shard
+  wallclock skew <1.5× to keep round-robin, otherwise promote
+  size-aware greedy.
 
 ## Steps
 
@@ -172,6 +176,19 @@ Two orthogonal kwargs-capable registries — `chunking` (text → K chunks) and 
 `done` · [`validate-source-stats/`](./validate-source-stats/)
 
 `impresso-embed-validate --source <path>` cross-references the input shard with each of the three mismatch buckets — above-tolerance, missing-in-target, missing-in-produced — and emits per-direction stats (char-length log-scale histogram, `lg` / `tp` breakdowns, sample excerpts, worst-drift cosine distances) via Rich panels. ANSI auto-strips on non-TTY so legacy substring contracts in tests keep passing. `ValidationReport.passed` and exit codes are unchanged. See CLAUDE.md decision **"Validate — source-backed diagnostics (drifted + missing) + Rich rendering"**.
+
+### 18. multi-gpu-sharding
+
+`done` · [`multi-gpu-sharding/`](./multi-gpu-sharding/)
+
+Horizontal throughput via file-level data parallelism: `--shard-index i --num-shards N` on `impresso-embed-create`, round-robin selection (`enumerate(keys) % N == i`) over `list_objects_v2`'s lexicographic output, applied lazily at `pipeline._plan_files`. One runai job per shard, one GPU per job, model replicated across jobs — no DDP/FSDP/tensor-parallel, no NCCL, no coordination beyond the static `(i, N)` partition. Re-runs are idempotent via the existing `--skip-if-s3-exists` + `reembed-on-change` `LastModified` check. Lifts the CLAUDE.md → Non-goals "Multi-GPU/DDP out of scope" bar **for the data-parallel case only**; multi-node and model-parallel mechanisms remain out of scope. Makefile gains `runai-submit-shard` (single shard) + `runai-submit-multi NUM_SHARDS=N` (loop). See CLAUDE.md decision **"Multi-GPU throughput via file-level sharding"**.
+
+**Still in queue** (gated on the first real 4-shard RCP run):
+
+- Calibration: shard wallclock skew on the largest provider; promote size-aware greedy if skew >2×.
+- Per-shard manifest INFO line at startup (file count + first/last keys for `runai describe job` audit).
+- Per-shard log filename (`<provider>-shard-i-of-N.log`) so concurrent shards don't stomp each other.
+- Cross-shard telemetry aggregator (operator-side, not code).
 
 ## Adding a new step
 

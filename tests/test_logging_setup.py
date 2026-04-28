@@ -107,6 +107,42 @@ def test_tqdm_handler_default_level_is_error() -> None:
     assert handler.level == logging.ERROR
 
 
+# --- step 18: per-shard log filename ----------------------------------------
+
+
+def test_resolve_log_path_unchanged_when_no_shard_kwargs(tmp_path: Path) -> None:
+    """Existing call sites (no shard kwargs) get `<provider>.log` as before."""
+    now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+    path = _resolve_log_path(provider="BNL", log_dir=tmp_path, now=now)
+    assert path.name == "BNL.log"
+
+
+def test_resolve_log_path_unchanged_when_num_shards_one(tmp_path: Path) -> None:
+    """Default sharding (N=1) keeps the historical filename."""
+    now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+    path = _resolve_log_path(
+        provider="BNL", log_dir=tmp_path, now=now, shard_index=0, num_shards=1
+    )
+    assert path.name == "BNL.log"
+
+
+def test_resolve_log_path_includes_shard_suffix_when_n_gt_1(tmp_path: Path) -> None:
+    """Multi-shard (N>1) appends `-shard-i-of-N` so concurrent shards don't collide."""
+    now = datetime(2026, 4, 23, tzinfo=timezone.utc)
+    path = _resolve_log_path(
+        provider="BNL", log_dir=tmp_path, now=now, shard_index=2, num_shards=4
+    )
+    assert path == tmp_path / "2026-04-23" / "BNL-shard-2-of-4.log"
+
+
+def test_configure_logging_threads_shard_kwargs(tmp_path: Path) -> None:
+    """`configure_logging(...)` forwards shard kwargs through to the resolver."""
+    path = configure_logging(
+        provider="BNL", log_dir=tmp_path, shard_index=1, num_shards=3
+    )
+    assert path.name == "BNL-shard-1-of-3.log"
+
+
 def test_configure_logging_disables_transformers_default_handler(tmp_path: Path) -> None:
     """transformers' built-in stderr handler must be disabled + set to propagate,
     otherwise its `warning` calls bypass our file + tqdm handlers."""

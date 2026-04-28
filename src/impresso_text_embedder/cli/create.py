@@ -189,6 +189,26 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # Multi-GPU horizontal sharding (step 18). One runai job per shard, one
+    # GPU per job, model replicated across jobs. Defaults reproduce the
+    # single-job path bit-for-bit. Both flags must be set together.
+    p.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help=(
+            "zero-indexed shard this job owns (use with --num-shards). "
+            "Round-robin over list_objects_v2 lexicographic order; "
+            "see .progress/multi-gpu-sharding/notes.md."
+        ),
+    )
+    p.add_argument(
+        "--num-shards",
+        type=int,
+        default=1,
+        help="total number of shards across the multi-job run (default 1 = no sharding)",
+    )
+
     p.add_argument(
         "--log-level-file",
         default="INFO",
@@ -233,6 +253,8 @@ def _build_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         chunking_strategy_name=args.chunking_strategy,
         force=args.force,
         encoder=encoder,
+        shard_index=args.shard_index,
+        num_shards=args.num_shards,
     )
 
 
@@ -260,7 +282,10 @@ def _build_long_doc_config(args: argparse.Namespace, model: object) -> LongDocCo
     chunk_tokens = _resolve_chunk_tokens(args.long_doc_chunk_tokens, tokenizer)
 
     def _count(text: str) -> int:
-        return len(tokenizer.encode(text, add_special_tokens=False))
+        # verbose=False silences transformers' "sequence length > model_max_length"
+        # warning — we count to decide whether to chunk, never feed the raw ids
+        # to the model.
+        return len(tokenizer.encode(text, add_special_tokens=False, verbose=False))
 
     chunker = get_chunker(
         "fixed-window",
@@ -311,10 +336,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.limit is not None and args.limit < 0:
         parser.error(f"--limit must be >= 0, got {args.limit}")
+    if args.num_shards < 1:
+        parser.error(f"--num-shards must be >= 1, got {args.num_shards}")
+    if not (0 <= args.shard_index < args.num_shards):
+        parser.error(
+            f"--shard-index must be in [0, --num-shards), got "
+            f"--shard-index={args.shard_index} --num-shards={args.num_shards}"
+        )
+    # Foot-gun: --num-shards 4 alone would silently run only shard 0 of 4.
+    # Require both flags or neither.
+    if (args.shard_index != 0) != (args.num_shards != 1):
+        parser.error(
+            "--shard-index and --num-shards must be set together; got "
+            f"--shard-index={args.shard_index} --num-shards={args.num_shards}"
+        )
     log_path = configure_logging(
         provider=args.provider,
         log_dir=args.log_dir,
         log_level_file=args.log_level_file,
+        shard_index=args.shard_index,
+        num_shards=args.num_shards,
     )
     print(f"logging to {log_path}", file=sys.stderr)
     _load_env()

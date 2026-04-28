@@ -425,6 +425,104 @@ def test_main_threads_attention_and_unpad_into_load_model():
     assert kwargs["unpad_inputs"] is False
 
 
+# --- step 18: multi-gpu file-list sharding -----------------------------------
+
+
+def test_parser_shard_flags_default_to_no_op():
+    """Defaults `--shard-index 0 --num-shards 1` reproduce single-job behaviour."""
+    args = create_cli.build_parser().parse_args(
+        ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o"]
+    )
+    assert args.shard_index == 0
+    assert args.num_shards == 1
+
+
+def test_parser_shard_flags_accept_overrides():
+    args = create_cli.build_parser().parse_args(
+        [
+            "--provider", "P", "--input-bucket", "i", "--output-bucket", "o",
+            "--shard-index", "2", "--num-shards", "4",
+        ]
+    )
+    assert args.shard_index == 2
+    assert args.num_shards == 4
+
+
+def test_build_pipeline_config_threads_shard_fields():
+    args = create_cli.build_parser().parse_args(
+        [
+            "--provider", "P", "--input-bucket", "i", "--output-bucket", "o",
+            "--shard-index", "1", "--num-shards", "3",
+        ]
+    )
+    cfg = create_cli._build_pipeline_config(args)
+    assert cfg.shard_index == 1
+    assert cfg.num_shards == 3
+
+
+def test_main_rejects_zero_num_shards(capsys):
+    import pytest
+    with pytest.raises(SystemExit):
+        create_cli.main(
+            ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o",
+             "--num-shards", "0", "--dry-run"]
+        )
+    assert "--num-shards must be >= 1" in capsys.readouterr().err
+
+
+def test_main_rejects_shard_index_out_of_range(capsys):
+    import pytest
+    with pytest.raises(SystemExit):
+        create_cli.main(
+            ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o",
+             "--shard-index", "4", "--num-shards", "4", "--dry-run"]
+        )
+    err = capsys.readouterr().err
+    assert "--shard-index must be in [0, --num-shards)" in err
+
+
+def test_main_rejects_shard_index_alone(capsys):
+    """`--shard-index 2` without `--num-shards` is caught by the bounds check
+    (2 not in [0, 1)) — same end result, clear error."""
+    import pytest
+    with pytest.raises(SystemExit):
+        create_cli.main(
+            ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o",
+             "--shard-index", "2", "--dry-run"]
+        )
+    assert "--shard-index" in capsys.readouterr().err
+
+
+def test_main_rejects_num_shards_alone(capsys):
+    """`--num-shards 4` without `--shard-index` is the silent foot-gun guard:
+    bounds-check passes (0 ∈ [0, 4)) but both-or-neither rule fires."""
+    import pytest
+    with pytest.raises(SystemExit):
+        create_cli.main(
+            ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o",
+             "--num-shards", "4", "--dry-run"]
+        )
+    err = capsys.readouterr().err
+    assert "must be set together" in err
+
+
+def test_main_threads_shard_fields_into_configure_logging():
+    """The CLI passes shard_index/num_shards into configure_logging so the
+    log filename gets the per-shard suffix."""
+    with (
+        patch.object(create_cli, "process_provider", return_value={"processed": 0, "skipped": 0, "files": []}),
+        patch.object(create_cli, "_load_env"),
+        patch.object(create_cli, "configure_logging") as cfg_log,
+    ):
+        rc = create_cli.main(
+            ["--provider", "P", "--input-bucket", "i", "--output-bucket", "o",
+             "--shard-index", "2", "--num-shards", "4", "--dry-run"]
+        )
+    assert rc == 0
+    assert cfg_log.call_args.kwargs["shard_index"] == 2
+    assert cfg_log.call_args.kwargs["num_shards"] == 4
+
+
 def test_parser_log_flags_default_and_override(tmp_path):
     # Defaults: log-dir=None (resolve-time default), log-level-file=INFO.
     default = create_cli.build_parser().parse_args(
