@@ -215,9 +215,6 @@ impresso-embed-validate \
   --source s3://<bucket>/inputs/EXP-1912.jsonl.bz2
 ```
 
-See the *"Validate — source-backed diagnostics"* decision in
-[`CLAUDE.md`](./CLAUDE.md) for the full output format.
-
 ### Export to CSV
 
 `--csv-out <dir>` dumps mismatches as spreadsheet-friendly CSVs alongside the Rich panels:
