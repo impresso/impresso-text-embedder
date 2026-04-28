@@ -10,11 +10,6 @@
 | `impresso-embed-create`   | Walk a provider tree and embed every shard it finds.            |
 | `impresso-embed-validate` | Structural check, or per-record cosine comparison + diagnostics. |
 
-**Looking for deeper detail?**
-
-- [`CLAUDE.md`](./CLAUDE.md) — data contract, S3 layout, hardware profile, full list of design decisions.
-- [`.progress/`](./.progress/) — per-subsystem notes (I/O, chunking, GPU tuning, validation, …).
-- [`.progress/plan.md`](./.progress/plan.md) — migration status.
 
 ## Install
 
