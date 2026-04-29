@@ -24,8 +24,6 @@ dist/
 .venv/
 *.d/
 
-*.jsonl
-
 # HuggingFace cache (if user opts into local caching via HF_HOME=./hf.d)
 hf.d/
 
@@ -35,3 +33,8 @@ build.d/
 # Local scratch (ad-hoc downloads, sample outputs)
 tmp/
 .out/
+
+# Feasability research lives on feat/feasability-research; ignore any
+# leftover working-tree contents (e.g. the AGGREGATED corpus dump) on
+# this branch so they don't surface in git status.
+feasability/
