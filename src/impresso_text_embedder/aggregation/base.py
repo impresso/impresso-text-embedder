@@ -4,7 +4,7 @@ An aggregation strategy collapses ``K`` per-chunk embeddings (shape
 ``[K, D]``) into a single ``D``-dim document vector. Used at
 ``--embedding-level text`` when a document was chunked because it
 exceeded the model's max context (see
-``.progress/long-doc-chunking/notes.md``).
+``.history/long-doc-chunking/notes.md``).
 
 The registry mirrors :mod:`impresso_text_embedder.chunking.base` so new
 strategies (length-weighted mean, max, attention-weighted, …) can slot

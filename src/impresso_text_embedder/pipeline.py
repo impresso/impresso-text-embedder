@@ -10,7 +10,7 @@ GPU is not stalled by IO between files:
 * an **upload** thread sends the completed output tempfile to S3 while the
   main thread moves on to the next file.
 
-Design and rationale: ``.progress/io-throughput/notes.md``.
+Design and rationale: ``.history/io-throughput/notes.md``.
 """
 
 from __future__ import annotations

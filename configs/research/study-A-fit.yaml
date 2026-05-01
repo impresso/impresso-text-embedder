@@ -1,0 +1,39 @@
+# Study A — "docs that fit in context".
+#
+# Research question:
+# "Does forcing sub-context chunking + mean+L2 pool produce better
+# doc-level embeddings than one-shot encoding the whole doc?"
+#
+# Design implications baked into this config:
+# - Corpus is bounded above by the model context (8192 tokens) so the
+#   one-shot baseline never truncates real content. The S0 truncate
+#   scenario is therefore a no-loss baseline — it isolates the
+#   attention-vs-pooling trade-off.
+# - Corpus is bounded below by 4096 tokens so chunk_tokens=4096 fires
+#   at least once on every doc; smaller sizes fire correspondingly more.
+# - chunk_tokens=8190 is OMITTED from the grid here because it would
+#   collapse to the one-shot path on this corpus (it's identical to S0
+#   for docs ≤ 8192). Step 6 is the one-place-where-we-list-the-grid.
+#
+# Eligibility-pool sizing at min/max tokens=(4096, 8192) — verify before
+# locking n_per_lg, see open item O5 in study-config/notes.md.
+
+extends: base.yaml
+
+study:
+  name: "A-fit"
+
+corpus:
+  ocrqa_min: 0.84
+  year_min: 1930
+  year_max: 1980
+  min_tokens: 7000
+  max_tokens: 8000
+  n_per_lg: 300
+  providers:
+    fr: 
+    de: 
+
+scenarios:
+  # 4 sizes × 3 chunkers + 1 truncate baseline = 13 scenarios.
+  chunk_sizes: [512, 1024, 2048, 4096]

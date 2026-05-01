@@ -5,7 +5,7 @@ Keeps encoder calls GPU-friendly: text-level is batched across records via
 already, so they're done per record.
 
 Long-document handling at text level (design:
-``.progress/long-doc-chunking/notes.md``):
+``.history/long-doc-chunking/notes.md``):
 
 A document exceeding the model's max context is silently truncated by the
 tokenizer by default. When :attr:`EncoderConfig.long_doc` is configured

@@ -1,6 +1,6 @@
 """Chunking strategies for texts exceeding the model's max sequence length.
 
-See ``.progress/chunking/notes.md`` for the registry contract. The `semantic`
+See ``.history/chunking/notes.md`` for the registry contract. The `semantic`
 strategy is registered at package import time via a lazy factory so importing
 this package does not pull in ``chonkie`` until the strategy is actually used.
 """
@@ -14,10 +14,10 @@ from impresso_text_embedder.chunking.base import (
 )
 
 
-def _make_semantic() -> ChunkingStrategy:
+def _make_semantic(**kwargs: object) -> ChunkingStrategy:
     from impresso_text_embedder.chunking.semantic import SemanticStrategy
 
-    return SemanticStrategy()
+    return SemanticStrategy(**kwargs)  # type: ignore[arg-type]
 
 
 def _make_token_budget(**kwargs: object) -> ChunkingStrategy:

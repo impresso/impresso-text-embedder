@@ -1,7 +1,7 @@
 """S3 I/O helpers for impresso-text-embedder.
 
 Thin wrappers around boto3 for the streaming reader, existence check, and
-upload. See ``.progress/io-layer/notes.md`` for the reasoning (including why
+upload. See ``.history/io-layer/notes.md`` for the reasoning (including why
 the three S3 helpers below are vendored rather than imported from
 ``impresso_essentials.io.s3``).
 """
@@ -35,7 +35,7 @@ DEFAULT_S3_HOST_URL = "https://os.zhdk.cloud.switch.ch/"
 # rejects with ``MissingContentLength``. ``when_required`` restores a plain
 # Content-Length'd PUT. Needs boto3>=1.36.5 / s3transfer>=0.11.2 to propagate
 # through the high-level upload_file path. See
-# ``.progress/upload-integrity/notes.md``.
+# ``.history/upload-integrity/notes.md``.
 _S3_CONFIG = Config(
     request_checksum_calculation="when_required",
     response_checksum_validation="when_required",
@@ -209,7 +209,7 @@ def iter_jsonl_bz2_path(path: str | Path) -> Iterator[str]:
 
 
 # Defaults chosen from boto3's S3 guide plus the rationale in
-# ``.progress/io-throughput/notes.md``. 8 MB chunks × 10 threads gives us
+# ``.history/io-throughput/notes.md``. 8 MB chunks × 10 threads gives us
 # parallel ranged GETs against Ceph RadosGW (Switch Engines) without paying the
 # overhead of tiny parts on the long tail of small shards.
 DEFAULT_TRANSFER_CONFIG = TransferConfig(

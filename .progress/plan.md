@@ -1,194 +1,421 @@
-# Migration plan — impresso-text-embedder
+# research/chunking-eval — plan
 
-## What this file is
+Live ledger for the chunking-evaluation research on this branch. The migration
+that produced the production embedder is **done** and lives in
+[`../.history/plan.md`](../.history/plan.md); the locked decisions it recorded
+are the invariants this research operates within (see CLAUDE.md → "Decisions
+inherited from the migration").
 
-The chronological ledger of the migration from the Make/script layout on
-`main` to the Python package on `feat/migration-python-package`. Step
-numbers are stable; statuses advance as each step lands.
+## Research question
 
-- **Not the rulebook.** Current architectural rules live in
-  [`CLAUDE.md`](../CLAUDE.md), under
-  [Decisions recorded](../CLAUDE.md#decisions-recorded).
-- **Not the design narrative.** Each numbered step links to a
-  `.progress/<slug>/` notes folder where the mechanism, rationale,
-  rejected alternatives, and step-specific open items live.
-- **How to read it.** Scroll the status table for the at-a-glance picture,
-  then click into a step. Each step body is a one-paragraph summary with
-  pointers — depth lives in the linked folder.
+Production currently chunks only when `tokens(doc) > model_max_tokens` (8192
+for `gte-multilingual-base`). The argument was theoretical: CLS-pooling means
+chunk-and-pool drops cross-chunk attention without a recovery mechanism. The
+question this branch answers empirically: **on Impresso historical newspapers,
+does forcing sub-8k chunking + mean+L2 pool produce better doc-level
+embeddings than one-shot encode at 8190?**
 
-Statuses: `done` · `partial` · `wip` · `todo` · `deferred`.
+Answer is per-language (fr / de / lb) — chars-per-token differs across
+Romance / Germanic / Luxembourgish, so the optimum may differ.
+
+## Scope (locked with the user)
+
+- **Embedding level**: `--embedding-level text` only. One vector per doc,
+  mean+L2 when chunked. Chunk-level retrieval is a different question and is
+  out of scope.
+- **Languages**: fr / de / lb. Italian deferred.
+- **Relevance signal**: Chroma-style synthetic LLM query+excerpt pairs only.
+  Native Impresso annotations (topic clusters, text-reuse, NER) are **not**
+  used as a relevance signal — keeps methodology comparable to the published
+  chunking-eval literature and avoids inventing a bespoke signal.
+- **Strategies**: `truncate` at 8190 (production baseline); `fixed-window`
+  and `token-budget` at {512, 1024, 2048, 4096, 8190}; `semantic` (chonkie) at
+  one calibrated size.
+- **Aggregation**: `mean` for the primary sweep. Length-weighted / max /
+  first-chunk ablations only on the winning chunker.
+- **Corpus**: long articles (>4000 raw tokens), high OCR quality, topic-
+  bounded slice only as far as needed to keep generation cost bounded.
 
 ## Status at a glance
 
-| #  | Step                                                      | Status     | Notes folder                                                  |
-| -- | --------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
-| 1  | [package-skeleton](#1-package-skeleton)                   | `done`     | —                                                             |
-| 2  | [io-layer](#2-io-layer)                                   | `done`     | [`io-layer/`](./io-layer/)                                    |
-| 3  | [schema-text-rebuild](#3-schema-text-rebuild)             | `done`     | —                                                             |
-| 4  | [model-encoder](#4-model-encoder)                         | `done`     | [`gpu-throughput/`](./gpu-throughput/)                        |
-| 5  | [chunking](#5-chunking)                                   | `done`     | [`chunking/`](./chunking/)                                    |
-| 6  | [create-cli](#6-create-cli)                               | `done`     | [`create-cli/`](./create-cli/)                                |
-| 7  | [validate-cli](#7-validate-cli)                           | `done`     | [`validation-metric/`](./validation-metric/)                  |
-| 8  | [e2e-docs](#8-e2e-docs)                                   | `done`     | —                                                             |
-| 9  | [docker-runai](#9-docker-runai)                           | `done`     | [`docker-runai/`](./docker-runai/)                            |
-| 10 | [reembed-on-change](#10-reembed-on-change)                | `done`     | [`reembed-on-change/`](./reembed-on-change/)                  |
-| 11 | [gpu-profiles](#11-gpu-profiles)                          | `done`     | [`gpu-profiles/`](./gpu-profiles/)                            |
-| 12 | [drop-impresso-essentials](#12-drop-impresso-essentials)  | `done`     | [`io-layer/`](./io-layer/)                                    |
-| 13 | [io-throughput](#13-io-throughput)                        | `done`     | [`io-throughput/`](./io-throughput/)                          |
-| 14 | [model-revision-pin](#14-model-revision-pin)              | `done`     | [`model-revision-pin/`](./model-revision-pin/)                |
-| 15 | [structured-logging](#15-structured-logging)              | `done`     | [`structured-logging/`](./structured-logging/)                |
-| 16 | [long-doc-chunking](#16-long-doc-chunking)                | `partial`  | [`long-doc-chunking/`](./long-doc-chunking/)                  |
-| 17 | [validate-source-stats](#17-validate-source-stats)        | `done`     | [`validate-source-stats/`](./validate-source-stats/)          |
-| 18 | [multi-gpu-sharding](#18-multi-gpu-sharding)              | `done`     | [`multi-gpu-sharding/`](./multi-gpu-sharding/)                |
-
-## Currently active
-
-- [Step 16 — `long-doc-chunking`](#16-long-doc-chunking) (`partial`):
-  the framework + `fixed-window` chunker + `mean` aggregation shipped.
-  Additional strategies are small follow-ups — each is one module + one
-  `register_strategy` call + one `choices=` entry.
-
-## Open items needing real hardware / data
-
-Per-step acceptance items that require live measurement, not code:
-
-- **Step 11**: per-profile batch-size calibration; confirm FA3 fires on
-  H100; A100↔H100 `--tol 1e-4` cross-check; record RCP node-type labels.
-- **Step 13**: confirm GPU SM utilization ≥85% during steady-state encode.
-- **Step 16**: real-data calibration of `--long-doc-chunk-tokens`;
-  per-language `chars_per_token` for the fast gate; long-doc query-set
-  recall vs. the truncate baseline.
-- **Step 17**: per-`lg` / per-`tp` mean-drift breakdowns inside the
-  VALUE panel; drift-vs-length correlation; `--source-samples N` flag.
-- **Step 18**: 4-shard real-RCP run on the largest provider; shard
-  wallclock skew <1.5× to keep round-robin, otherwise promote
-  size-aware greedy.
+| # | Slug | Status |
+|---|------|--------|
+| 1 | [corpus-selection](./corpus-selection/notes.md) | done |
+| 2 | [corpus-fetch](./corpus-fetch/notes.md) | done |
+| 3 | [embedding-sweep](./embedding-sweep/notes.md) | done |
+| 4 | [query-generation](./query-generation/notes.md) | wip |
+| 5 | [study-config](./study-config/notes.md) | done |
+| 6 | study-A-fit + study-B-overflow runs | todo |
+| 7 | [query-embed](./query-embed/notes.md) | wip |
+| 8 | [eval-harness](./eval-harness/notes.md) | wip |
+| 9 | [semantic-chunker-fixes](./semantic-chunker-fixes/notes.md) | done |
 
 ## Steps
 
-### 1. package-skeleton
+### 1 — corpus-selection
 
-`done` · no notes folder
+Per-language manifest of long, high-OCR newspaper articles for the
+chunking-strategy sweep. Streams the 30 GB langident-aggregated jsonl in a
+single pass, filters to `tp=article` + `ocrqa>=0.9` + `len >= min_tokens *
+chars_per_token[lg]` + curated providers + year window, and per-language
+samples N entries deterministically. Output: 200 fr + 200 de articles
+manifest at `tmp/chunking-eval/corpus-manifest.jsonl`. lb dropped from the
+default sweep — corpus property: long lb articles are systematically low-OCR
+(every `len>=14000` lb article in the corpus has `ocrqa<=0.67`). Provider
+defaults were corrected after the first run revealed NZZ/SWA/SUB carry
+almost no de articles (real carriers are SNL, FedGaz, BNL). Code at
+`src/impresso_text_embedder/research/corpus_select.py`; design narrative,
+rejected alternatives, and frozen Q1–Q7 decisions in
+[`./corpus-selection/notes.md`](./corpus-selection/notes.md).
 
-Initial scaffolding: `pyproject.toml` (hatchling + uv), `src/impresso_text_embedder/`, Python ≥ 3.10, ruff config, `LICENSE` (AGPL-3.0-or-later, mirrored from `main`), `tests/` placeholder, gitignore update, `.flake8` removed. Verified by `uv sync` resolving cleanly and the placeholder test passing.
+### 2 — corpus-fetch
 
-### 2. io-layer
+Materialises the manifest into a single `.jsonl.bz2` corpus shard the
+downstream sweeps consume. Groups manifest entries by their rebuilt
+source file (400 entries → 222 unique yearly shards), downloads each
+shard once via the production multipart-parallel transfer config, scans
+it locally with an early break once every wanted ci_id has been picked
+up, falls back to `text.rebuild_ft_from_offsets` when a rebuilt record
+lacks a precomputed `ft`, and writes records back **in manifest order**
+so the downstream sweep sees a deterministic input. Output schema:
+`{ci_id, lg, year, provider, alias, len_chars, ocrqa, tp, ft, sents,
+lingproc_path?}` — manifest fields plus the rebuilt payload, with
+`sents` preserved for future sentence-aware chunkers. Land path:
+`s3://140-processed-data-sandbox/chunking-eval/corpus/corpus-v1.jsonl.bz2`
+(research outputs are segregated under the `chunking-eval/` prefix —
+they never write to the production `embeddings/docs/...` convention).
+Code at `src/impresso_text_embedder/research/corpus_fetch.py`; design
+narrative, rejected alternatives, and worker-count calibration in
+[`./corpus-fetch/notes.md`](./corpus-fetch/notes.md).
 
-`done` · [`io-layer/`](./io-layer/)
+### 3 — embedding-sweep
 
-Streaming S3 reader for `.jsonl.bz2` shards, provider/alias/year enumeration, idempotent skip-if-exists. `impresso_essentials.io.s3.read_jsonlines` deliberately bypassed because it slurps the whole file into memory and breaks the prefetch model. Dotenv loaded at the CLI boundary only.
+Run every chunking strategy in scope over the corpus shard from step 2,
+one Run:AI job per scenario, write one `.jsonl.bz2` of doc-level
+embeddings per scenario. 16 scenarios live in
+`research/scenarios.py`: `S0` truncate baseline plus three chunker
+families — `fixed-window` (S1–S5), `token-budget` (S6–S10), `semantic`
+chonkie (S11–S15) — each covering the *same* five chunk sizes
+{512, 1024, 2048, 4096, 8190}. The grid is intentionally symmetric so
+cross-family comparisons at a fixed size are a one-row lookup.
+Aggregator is `mean` across the board (mean+L2 per the locked scope).
+Each job's output lands at
+`s3://140-processed-data-sandbox/chunking-eval/embeddings/<scenario_id>_<label>/corpus-v1.jsonl.bz2`.
+Per-record output combines the production text-level schema
+(`{ci_id, model_id, embedding, size, ts, ci_type}`) with manifest
+metadata (`{lg, year, provider, alias, ocrqa, len_chars}`) and
+sweep-level fields (`{n_chunks, scenario_id, chunker, chunk_tokens}`)
+so downstream eval can stratify in one pass. The sweep CLI sets
+`LongDocConfig.model_max_tokens = scenario.chunk_tokens` so a target of
+e.g. 512 chunks every doc longer than 512 tokens — needed because the
+production embedder's "chunk only when doc > model_max_tokens" guard
+would otherwise skip every doc ≤ 8192 and defeat the experiment.
+Scenarios that need a `stride` kwarg on `FixedWindowStrategy`
+(sliding-window) or new aggregators (length-weighted/max/first-chunk)
+are out of scope on this step — the registry only emits scenarios the
+current chunking + aggregation registries can build. Code at
+`src/impresso_text_embedder/research/{scenarios,embed_sweep}.py`;
+Make targets `runai-submit-research SCENARIO=Sx` and
+`runai-submit-research-all` (loops the registry). Design narrative,
+rejected alternatives (production-schema field, side-channel callback,
+single-job loop, per-language split), and the duplicate-chunker-pass
+rationale for `n_chunks` in
+[`./embedding-sweep/notes.md`](./embedding-sweep/notes.md).
 
-### 3. schema-text-rebuild
+### 4 — query-generation
 
-`done` · no notes folder
+Generate a small, position-stratified synthetic
+`(query, gold_excerpts)` set against the corpus shard from step 2 so
+the eval step (TBD) can score the 16 scenario embeddings from step 3
+with token-level Recall@k / IoU / Precision_Ω. Methodology mirrors
+[Chroma's chunking-eval protocol](https://research.trychroma.com/evaluating-chunking)
+(LLM is shown the whole doc, asked for a query whose answer is
+contained in the doc, plus verbatim references) with one explicit
+modification: queries are **stratified into 3 position buckets**
+(head / mid / tail of the source doc by char offset) so a chunker
+can't win by silently dropping the back half of every article. Two
+queries per (doc, bucket) — one `question` and one
+`topical-phrase`, deterministically (no RNG) — so 400 docs × 3
+buckets × 2 types ≈ ~2400 generations. LLM is
+`Qwen/Qwen3-30B-A3B-Instruct-2507` via the EPFL RCP AIaaS endpoint
+(`https://inference.rcp.epfl.ch/v1`, OpenAI-compatible); auth via
+`RCP_API_KEY` from `.env`. Both query types get equal coverage at
+every bucket so the eval can stratify by `(bucket, query_type)`
+directly; summary-style queries are out (inflate Recall via lexical
+overlap). The only quality gate at v1 is **verbatim-anchor
+verification** — each LLM-emitted reference must appear as an exact
+substring of the source `ft` *and* fall inside the position bucket;
+queries with no surviving references are dropped. Cosine
+relevance/dedup filtering is deferred to O7 (no retention-rate
+baseline yet to tune against). Output lands at
+`s3://140-processed-data-sandbox/chunking-eval/queries/queries-v1.jsonl.bz2`.
+Code at `src/impresso_text_embedder/research/query_generate.py`;
+Make target `research-query-generate`. Cost at Qwen3-30B-A3B prices
+≈ $0.80 / ~30–45 min wallclock at the 5-parallel AIaaS rate. Design
+narrative, rejected alternatives (OpenAI SDK, CaaS fallback,
+quintile buckets, sentence-aligned subsampling, summary as a query
+type, cosine filter at v1), and open items (cosine filter
+calibration, stats sidecar, Qwen3 OCR-noise sanity check) in
+[`./query-generation/notes.md`](./query-generation/notes.md).
 
-Ports `rebuild_ft_from_offsets` and `rebuild_sentence_from_offsets` verbatim from `main:lib/text_embedding_processor.py`. Typed schemas for the three output shapes (text / sentence / chunk).
+### 5 — study-config
 
-### 4. model-encoder
+Refactored the four research CLIs to read all hyperparameters from a
+single YAML config per *study*, replacing the per-module
+`DEFAULT_*` constants + Make variables + CLI flags pattern that
+allowed the chunk-grid-vs-corpus inconsistency surfaced in the
+review of steps 1/3. New module
+`src/impresso_text_embedder/research/study_config.py` ships the
+Pydantic schema + `load_study_config(path)` loader with single-level
+`extends:` deep-merge, `{study}` path templating validated at load
+time, and `config_sha` provenance fingerprint. New module
+`scenario_builder.py` replaces the hardcoded 16-row `_SCENARIOS`
+tuple with `build_scenarios(cfg.scenarios)` auto-numbered `S0..SN`
+plus a `ScenarioRegistry` lookup helper; the Makefile shells out to
+`python -m research.scenario_builder --config <path> --list-ids` so
+the build matrix stays in sync with the YAML. Layout under
+`configs/research/`: `base.yaml` (cross-study invariants) +
+`study-v1.yaml` (frozen pre-refactor defaults — 16-row grid
+preserved exactly) + `study-A-fit.yaml` (docs ≤ 8192 tokens,
+13-scenario grid) + `study-B-overflow.yaml` (docs ≥ 16384 tokens,
+16-scenario grid). Each of the four CLIs gained `--config <path>`;
+per-flag CLI args still override field-by-field. `embed_sweep` and
+`query_generate` emit `study_name` + `study_config_sha` in every
+output record. `corpus_select` gained a `max_tokens` upper bound
+(was a hole in the schema). Makefile driven by `STUDY ?= study-v1`;
+target the 16-scenario v1 sweep with `make
+runai-submit-research-all`, study A with `make STUDY=study-A-fit
+runai-submit-research-all`, etc. CLAUDE.md → "Decisions inherited
+from the migration" gained a "Study-config YAML" entry listing the
+load-time invariants. 417 tests pass. Code at
+`src/impresso_text_embedder/research/{study_config.py,scenario_builder.py}`;
+design narrative, rejected alternatives (single multi-study YAML,
+TOML, Hydra, chained `extends:`, globally unique scenario ids,
+auto-derived chunkers), and the deferred regression check (run
+new pipeline against `study-v1.yaml` and diff manifest against the
+existing `corpus-v1.jsonl.bz2` ci_ids) in
+[`./study-config/notes.md`](./study-config/notes.md).
 
-`done` · [`gpu-throughput/`](./gpu-throughput/)
+### 6 — study-A-fit + study-B-overflow runs
 
-`SentenceTransformer` load + bf16 autocast around `encode`, fp32 weights, `inference_mode`, `trust_remote_code=True` for `gte-multilingual-base`. See CLAUDE.md decision **"A100 bf16 strategy"**. Real-GPU throughput measurement landed later (steps 11 and 13).
+Run the four-step pipeline (corpus-select → corpus-fetch →
+query-generate → embedding-sweep) against each of the two new
+studies and emit a single comparative report answering the
+chunk-grid-vs-corpus decomposition the previous turns surfaced.
+Pre-conditions: extend the step-1 eligible-count scan to
+thresholds `{8192, 12288, 16384, 20000}` per language to confirm
+the n=200 pool size for study B is feasible (de may force a
+threshold relaxation to 12288 or asymmetric N). Also blocked on
+step 7 landing — the eval harness consumes the
+`queries-embedded.jsonl.bz2` artefact this step does not
+produce. Acceptance bar: two `.jsonl.bz2` shards landing at
+`chunking-eval/A-fit/corpus.jsonl.bz2` and
+`chunking-eval/B-overflow/corpus.jsonl.bz2`, plus the per-scenario
+embedding sweeps under `chunking-eval/{study}/embeddings/`, plus
+queries under `chunking-eval/{study}/queries.jsonl.bz2`. The eval
+report (token-level Recall@k, IoU, Precision_Ω stratified by
+`(study, scenario, chunker, chunk_tokens, position_bucket, lg)`) is
+the deliverable of this step.
 
-### 5. chunking
+### 7 — query-embed
 
-`done` · [`chunking/`](./chunking/)
+Materialise per-query embeddings to S3 once so the eval step in
+step 6 can join against per-scenario doc embeddings without
+re-loading the embedding model. New CLI
+`src/impresso_text_embedder/research/query_embed.py` mirrors
+`embed_sweep`'s scaffolding (study YAML resolution,
+`staged_input`/`staged_output`, log dir under
+`experiments/chunking-eval/<study>/`, `--no-upload` / `--limit`
+smoke-test knobs, `_resolve_value(cli, cfg, fallback)` knob
+precedence) and reuses the pinned model + revision declared in
+the study's `embed:` block. Reads the queries shard from step 4
+(`s3://{bucket}/{study.s3_root}/queries.jsonl.bz2`), encodes via
+a single `model.encode_texts` call (no chunking, no aggregation,
+no record filtering — queries are short plain strings, never
+long-doc), and writes per-query records `{query_id, ci_id,
+embedding, size, model_id, ts, lg, query_type, position_bucket,
+position_chars, references, query_text, study_name,
+study_config_sha}` to `queries-embedded.jsonl.bz2` under the
+same study prefix. New constant `QUERIES_EMBEDDED_FILENAME`
+lands in `research/study_config.py` next to `QUERIES_FILENAME`.
+Make target `runai-submit-query-embed STUDY=<name>` mirrors
+`runai-submit-research`'s shape; logs land at
+`/rcp-scratch/<user>/experiments/chunking-eval/<study>/<YYYY-MM-DD>/query-embed.log`.
+Step 6's eval harness is the consumer.
 
-Kwargs-capable `text → K-chunks` registry. Ships `semantic` (chonkie `SemanticChunker` at threshold `0.5`, chunk size `1024`, min sentences `5`) for `--embedding-level=chunk`. Step 16 later extends the same registry with `fixed-window` and `token-budget` for the long-doc text path.
+Code at `src/impresso_text_embedder/research/query_embed.py`;
+design narrative, rejected alternatives (embed-inline-at-eval-
+time, `embed_sweep --mode queries` flag, bundling into
+`query_generate.py`, streaming read, pre-flight tokenise gate,
+chunker-span persistence), and open items in
+[`./query-embed/notes.md`](./query-embed/notes.md).
 
-### 6. create-cli
+### 8 — eval-harness
 
-`done` · [`create-cli/`](./create-cli/)
+Doc-level retrieval scoring + the per-study notebook that turns
+the per-scenario doc embeddings (step 3) and the per-query
+embedding shard (step 7) into the chunking-eval verdict. New
+helper module
+`src/impresso_text_embedder/research/eval.py` owns the testable
+surface — S3 loaders with local-mirror caching
+(`ensure_local`), pre-scoring sanity checks (`run_sanity` —
+embedding-dim consistency, `ci_id` coverage, unit-norm spot-
+check, lg breakdowns), the score pipeline (`score_queries` →
+tidy DataFrame with `rank`/`reciprocal_rank`/`recall_at_k` per
+`(query_id, scenario_id)`), and the Δ-vs-baseline table
+(`baseline_delta_table` with paired-bootstrap CIs flagging
+`beats_baseline`/`loses_to_baseline`). Per-language retrieval
+pool only (fr queries vs fr docs); cross-lingual is the gated
+O4/O18 ablation. Doc-level metrics only (binary Recall@k,
+MRR); chunk-level IoU / Precision_Ω deferred to O15 because
+chunker span-recovery doesn't exist on this branch. Tie-breaking
+on `rank_of_gold` is pessimistic (competition-rank) so a
+degenerate near-zero embedding scenario can't inflate Recall@1
+by tying with a flat-zero pool. The notebook
+(`notebooks/<study>-eval.ipynb`, generated from
+`scripts/build_eval_notebook.py <study>` so a template tweak
+lands in every per-study notebook with one rerun) is
+the analysis surface — seaborn theme (colorblind palette,
+white-grid context), per-language facets, S0 dashed reference
+line on every primary plot, log₂ x-axis on the convergence
+plot, symlog y-axis on the rank-of-gold boxplot. New deps under
+the `[research]` extra: pandas, numpy, seaborn, matplotlib,
+jupyterlab, pyarrow — kept off the default install so the
+production Docker image stays lean. Headline plots: Recall@5 by
+scenario (faceted by lg, hued by chunker), Recall@5 vs
+`chunk_tokens` (convergence), position-bucket robustness, MRR,
+query-type ablation (closes O9), rank-of-gold boxplot,
+`n_chunks` distribution. Verdict lands in the notebook's last
+markdown cell — three lines per language citing the Δ Recall@5
++ CI from the Δ-table. **No production CLI changes**: this
+branch is research-only; findings ship as a recommendation,
+not a default-flag flip. Code at
+`src/impresso_text_embedder/research/eval.py` (20 unit tests
+in `tests/test_research_eval.py`); generator at
+`scripts/build_eval_notebook.py`; notebook for study-A-fit at
+`notebooks/study-A-fit-eval.ipynb`. Design narrative, rejected
+alternatives (CLI-only, all-inline notebook, papermill,
+token-level Recall@k, NDCG, pre-computed CIs, single
+multi-study notebook), and open items O15–O18 (chunk-level
+metrics, verdict-cell automation, cross-study notebook,
+cross-lingual ablation) in
+[`./eval-harness/notes.md`](./eval-harness/notes.md).
 
-`impresso-embed-create --provider …` CLI entry point + orchestrator: 1:1 input→output mapping, model load, encode, upload. Output schema aligned to the Impresso document-embeddings spec — required `{ci_id, model_id, embedding, size}`, optional `{ts, ci_type}`. See CLAUDE.md decision **"Text-level output schema aligned with Impresso document-embeddings schema"**. The async prefetch + upload overlap originally planned for this step actually landed in step 13.
+### 9 — semantic-chunker-fixes
 
-### 7. validate-cli
+Three coupled defects in the semantic family (S11–S15) of the sweep,
+all silent in pre-fix runs: (a) chonkie's `chunk_size` was measured
+in `potion-base-8M`'s 30k-vocab WordPiece tokenizer rather than the
+GTE multilingual SentencePiece tokenizer, so realized chunks were
+~58% of the nominal target on French/German; (b) our
+`SemanticStrategy` passed `min_sentences=` to chonkie 1.6.4, which
+had renamed the kwarg to `min_sentences_per_chunk` — the floor was
+silently `1` instead of the documented `5`; (c) `model2vec` was
+missing from deps so chonkie warned and fell back to a slower
+SentenceTransformer-based `potion-base-8M`. Fixes: rename the
+kwarg in `chunking/semantic.py`, add an optional `tokenizer=` param
+that swaps `_chunker._tokenizer` post-construction (chonkie's
+public `tokenizer` is a read-only property and `SemanticChunker`
+accepts no constructor override; `_tokenizer` is the documented
+underlying attribute and the comment flags the private-API reach),
+thread `tokenizer=model.tokenizer` from
+`embed_sweep.build_long_doc_config` into the semantic-chunker
+kwargs, and add `model2vec>=0.3` to the `[research]` extra. Three
+new regression tests in `tests/test_chunking.py`. Out-of-sweep
+behaviour (`SemanticStrategy()` with no `tokenizer=`) preserved
+byte-for-byte. End-to-end smoke on a 464-GTE-token French passage
+at `chunk_size=200`: realized GTE tok/chunk shifted from
+`[116, 116, 116, 116]` to `[174, 174, 116]`. Remaining shortfall
+(174 vs 200) is chonkie's normal soft-target slack, not a bug —
+`n_tokens_per_chunk` already records realized sizes for post-hoc
+binning. Rejected alternatives (per-language scaling at the call
+site, custom `BaseEmbeddings` subclass, pinning to the ST
+fallback) and follow-ups (re-run S11–S15 against the existing
+study corpus to confirm the shift holds at scale; drop the
+`_tokenizer` reach when chonkie ships a public setter) in
+[`./semantic-chunker-fixes/notes.md`](./semantic-chunker-fixes/notes.md).
 
-`done` · [`validation-metric/`](./validation-metric/)
+## Open items
 
-`impresso-embed-validate <path> [--target] [--tol]`. Metric: cosine distance on L2-normalized vectors; default tolerance `1e-4`. See CLAUDE.md decision **"Validation metric"**. Step 17 later extends this CLI with `--source` diagnostics + Rich rendering.
-
-### 8. e2e-docs
-
-`done` · no notes folder
-
-Tiny local fixture run end-to-end through `impresso-embed-create`; first README polish; pruned the "Things to decide" list in CLAUDE.md, splitting it into "Decisions recorded" and "Still open — needs real GPU time".
-
-### 9. docker-runai
-
-`done` · [`docker-runai/`](./docker-runai/)
-
-Container image (`nvcr.io/nvidia/pytorch:25.03-py3`) with LDAP-matched user for PVC ownership; `ENTRYPOINT ["impresso-embed-create"]`. Slim `Makefile` for docker build/push, k8s secret creation, runai submit + interactive debug — no data-processing logic in the Makefile.
-
-### 10. reembed-on-change
-
-`done` · [`reembed-on-change/`](./reembed-on-change/)
-
-Skip-decision compares S3 `LastModified` of input vs. existing output; re-embeds when input is newer. `--force` overrides unconditionally. See CLAUDE.md decision **"Re-embed on input change"**. Known gap: byte-identical re-uploads still trigger a re-embed; this does not replace the deferred `impresso_essentials.versioning` manifest system.
-
-### 11. gpu-profiles
-
-`done` · [`gpu-profiles/`](./gpu-profiles/)
-
-Same image runs on A100 and H100/H200. `accel.py` detects capability at model-load time and picks the per-profile default batch size; xformers' `memory_efficient_attention` dispatches FA2/FA3 transparently from inside the bf16 autocast region. `unpad_inputs` + `use_memory_efficient_attention` reach the model config via `config_kwargs` (not `model_kwargs` — ST v5 pre-loads the config). See CLAUDE.md decisions **"GPU profile detection"** and **"xformers + unpadding wired as the default fast path"**.
-
-### 12. drop-impresso-essentials
-
-`done` · [`io-layer/`](./io-layer/) (shared with step 2)
-
-Removed the `impresso-essentials` runtime dependency entirely; vendored the three S3 helpers we used (`get_s3_client`, `get_s3_resource`, `upload_to_s3`) as ~40 lines of boto3 wrappers in `src/impresso_text_embedder/io.py`. See CLAUDE.md decision **"impresso-essentials vendored, not imported"**.
-
-### 13. io-throughput
-
-`done` · [`io-throughput/`](./io-throughput/)
-
-Closes the CPU/IO half of the "GPU must be the bottleneck" target: prefetch + upload overlap via two single-slot `ThreadPoolExecutor`s, `json` → `orjson` on read and write, multipart S3 transfers (`TransferConfig`: 8 MB / 8 MB / 10 threads), and per-file telemetry (`download_s` / `encode_s` / `upload_wait_s` / `gpu_util_mean,p10`). See CLAUDE.md decisions **"Per-provider pipeline overlap"**, **"JSON codec"**, **"Per-file telemetry"**.
-
-### 14. model-revision-pin
-
-`done` · [`model-revision-pin/`](./model-revision-pin/)
-
-`Alibaba-NLP/gte-multilingual-base` pinned to revision `f7d567e`. Single source of truth: `DEFAULT_MODEL_REVISION` in `src/impresso_text_embedder/model.py`. The `Makefile` mirrors the pin and `runai-submit` forwards it as an explicit `--model-revision` so the pin is recoverable from `runai describe job`. The output slug stays revision-agnostic by design. See CLAUDE.md decision **"Model revision pinned to `f7d567e`"**.
-
-### 15. structured-logging
-
-`done` · [`structured-logging/`](./structured-logging/)
-
-`impresso-embed-create` splits its output: full INFO log to `/rcp-scratch/<user>/experiments/embeddings/<YYYY-MM-DD>/<provider>.log` (override with `--log-dir`); terminal gets a `tqdm` bar with per-file postfix (`dl=…s enc=…s up=…s gpu=…%`) and ERROR records only. Fail-fast when neither `/rcp-scratch` nor `--log-dir` is available. See CLAUDE.md decision **"Structured logging split file ↔ terminal"**.
-
-### 16. long-doc-chunking
-
-`partial` · [`long-doc-chunking/`](./long-doc-chunking/)
-
-Two orthogonal kwargs-capable registries — `chunking` (text → K chunks) and `aggregation` (K vectors → 1 vector). Default long-doc path at `--embedding-level=text`: `fixed-window` chunker + `mean` aggregation; long docs are no longer silently truncated. `--long-doc-strategy truncate` restores pre-step-16 behaviour. Boundary: chunking only fires when `tokens(doc) > model_max_tokens` (one-shot wins for ≤8192-token docs because the encoder is CLS-pooled). See CLAUDE.md decision **"Long-doc handling at `--embedding-level text`"**.
-
-**Still in queue** (each lands as one module + one `register_strategy` line + one `choices=` entry):
-
-- Aggregation strategies: length-weighted mean, max pool, first-chunk, position-weighted, attention-weighted.
-- Chunking strategies: stride overlap, paragraph packer, recursive, chonkie `Token` / `Sentence`.
-- Token-budget chunker: prefer `record["sents"]` when present (extends `ChunkingStrategy.chunk` or builds the chunker per-record).
-- Telemetry: surface `n_chunks` on `TextRecord` (gated on schema `additionalProperties` policy).
-- Calibration: `--long-doc-chunk-tokens` sweep on real long docs; per-language `chars_per_token` for the fast gate.
-- Goldens: regenerate the long-doc subset of any integration goldens to match the new default.
-
-### 17. validate-source-stats
-
-`done` · [`validate-source-stats/`](./validate-source-stats/)
-
-`impresso-embed-validate --source <path>` cross-references the input shard with each of the three mismatch buckets — above-tolerance, missing-in-target, missing-in-produced — and emits per-direction stats (char-length log-scale histogram, `lg` / `tp` breakdowns, sample excerpts, worst-drift cosine distances) via Rich panels. ANSI auto-strips on non-TTY so legacy substring contracts in tests keep passing. `ValidationReport.passed` and exit codes are unchanged. See CLAUDE.md decision **"Validate — source-backed diagnostics (drifted + missing) + Rich rendering"**.
-
-### 18. multi-gpu-sharding
-
-`done` · [`multi-gpu-sharding/`](./multi-gpu-sharding/)
-
-Horizontal throughput via file-level data parallelism: `--shard-index i --num-shards N` on `impresso-embed-create`, round-robin selection (`enumerate(keys) % N == i`) over `list_objects_v2`'s lexicographic output, applied lazily at `pipeline._plan_files`. One runai job per shard, one GPU per job, model replicated across jobs — no DDP/FSDP/tensor-parallel, no NCCL, no coordination beyond the static `(i, N)` partition. Re-runs are idempotent via the existing `--skip-if-s3-exists` + `reembed-on-change` `LastModified` check. Lifts the CLAUDE.md → Non-goals "Multi-GPU/DDP out of scope" bar **for the data-parallel case only**; multi-node and model-parallel mechanisms remain out of scope. Makefile gains `runai-submit-shard` (single shard) + `runai-submit-multi NUM_SHARDS=N` (loop). See CLAUDE.md decision **"Multi-GPU throughput via file-level sharding"**.
-
-**Still in queue** (gated on the first real 4-shard RCP run):
-
-- Calibration: shard wallclock skew on the largest provider; promote size-aware greedy if skew >2×.
-- Per-shard manifest INFO line at startup (file count + first/last keys for `runai describe job` audit).
-- Per-shard log filename (`<provider>-shard-i-of-N.log`) so concurrent shards don't stomp each other.
-- Cross-shard telemetry aggregator (operator-side, not code).
+- ~~O1 — corpus-sampling specification: decade window, OCR-quality cutoff,
+  per-language target N~~ — closed by step 1; parameters frozen in
+  [corpus-selection/notes.md](./corpus-selection/notes.md).
+- ~~O2 — query-generation budget: GPT-4o calls, cost ceiling, cosine-filter
+  thresholds~~ — closed by step 4: budget framed in tokens/cost
+  (~$0.40 / ~20 min for 1200 generations on Qwen3-30B-A3B via RCP
+  AIaaS), cosine filter deferred to O7. See
+  [query-generation/notes.md](./query-generation/notes.md).
+- ~~O3 — eval harness location~~ — resolved: research code lives under
+  `src/impresso_text_embedder/research/` (chosen in step 1).
+- O4 — cross-lingual ablation gating: only run if monolingual sweep produces
+  a clear winner. Note: lb-as-target is corpus-blocked at uniform OCR≥0.9;
+  lb-as-source for a fr-query→de-pool ablation remains feasible.
+- O5 — chars_per_token calibration: refine the conservative 4.5/3.5
+  estimates by tokenising the actual manifest text once it's fetched.
+- O6 — de pre-1940 underrepresentation: 22 of 200 de docs are pre-1940
+  under the uniform 0.9 OCR cutoff; decide whether to add a stratified-by-
+  decade sampler or accept the skew.
+- O7 — cosine filter for query quality (relevance + intra-doc dedup). Not
+  applied at v1 since we have no retention-rate baseline yet to tune
+  against. Promote to a follow-up step that hits the AIaaS embeddings
+  endpoint (`Qwen/Qwen3-Embedding-8B`) if v1 inspection shows >10% of
+  queries are off-topic or near-duplicates. See
+  [query-generation/notes.md](./query-generation/notes.md) → O7.
+- O8 — `stats.json` sidecar at `chunking-eval/queries/stats.json` with
+  per-`(lg, bucket, query_type)` retention counts, real cost, and p50/p95
+  latency for the run. Trivial follow-up; gated on v1 landing.
+- O9–O11 — query-type ablation, multi-query-per-bucket, Qwen3 OCR-noise
+  sanity-check. All described in the step-4 notes; non-blocking.
+- O12 — eval harness inside step 6 consumes
+  `queries-embedded.jsonl.bz2` (from step 7) + per-scenario
+  `S{0..N}.jsonl.bz2` (from step 3), joins on `ci_id`, computes
+  per-query doc-level Recall@k and chunk-vs-excerpt IoU /
+  Precision_Ω from a deterministic chunker re-run keyed off
+  `scenario_id`. Lives in step 6's (yet-to-open) notes folder.
+- O13 — query-overflow telemetry: WARN when a query exceeds
+  `model_max_tokens` on the encode path. Trivial; gated on a real
+  step-7 run showing a non-zero count. Notes at
+  [query-embed/notes.md](./query-embed/notes.md) → O13.
+- O14 — re-embed queries under `Qwen/Qwen3-Embedding-8B` for the
+  deferred O7 cosine filter. Reachable today via `--model-name` /
+  `--model-revision` overrides on the step-7 CLI; promote to a
+  follow-up step only when O7 is promoted out of "deferred".
+  Notes at [query-embed/notes.md](./query-embed/notes.md) → O14.
+- O15 — chunk-level IoU / Precision_Ω. Diagnostic for chunker
+  boundary quality; needs a `chunk_with_spans()` helper that returns
+  `(text, char_start, char_end)` per chunk under a given scenario.
+  Doc-level metrics in step 8 fully answer the headline question;
+  promote when a follow-up needs the deeper diagnostic. Notes at
+  [eval-harness/notes.md](./eval-harness/notes.md) → O15.
+- O16 — verdict-cell automation in the per-study notebook
+  (auto-populate from the top Δ-table row). Notes at
+  [eval-harness/notes.md](./eval-harness/notes.md) → O16.
+- O17 — cross-study comparative notebook (`notebooks/cross-study-eval.ipynb`)
+  loading both studies' `scores.parquet`. Gated on both runs landing.
+  Notes at [eval-harness/notes.md](./eval-harness/notes.md) → O17.
+- O18 — cross-lingual ablation (renamed from O4). Run the eval with
+  `pool[pool.lg != query.lg]`. Gated on a monolingual winner. Notes at
+  [eval-harness/notes.md](./eval-harness/notes.md) → O18.
+- O19 — corpus-design changes for the next study-A-fit run: topic-bounded
+  prefilter, n_per_lg 200→300, decade-stratified sampling. Raised by the
+  2026-05-01 post-mortem on the first A-fit run; closes the ceiling-effect
+  + temporal-skew problems surfaced there. Notes at
+  [eval-harness/notes.md](./eval-harness/notes.md) → O19.
+- O20 — alternative metrics in `eval.score_queries`: cosine score margin
+  + softmax NLL alongside Recall@k. ~10 LoC reusing the cosine matrix
+  already built; surfaces embedding-confidence signal Recall@k hides
+  (e.g. semantic chunkers degrading NLL while looking competitive on
+  Recall@5). Notes at [eval-harness/notes.md](./eval-harness/notes.md) → O20.
+- O21 — hard-negative-restricted Recall@k as a free post-hoc equivalent
+  of topic-bounding: pre-mine top-K=10 hardest non-gold docs per query
+  via S0 baseline, freeze across scenarios, evaluate as
+  (1+K)-classification. Lands alongside O20. Notes at
+  [eval-harness/notes.md](./eval-harness/notes.md) → O21.
+- O22 — promote O15 (token-level IoU / Precision_Ω à la Chroma) sooner.
+  Reframed by the 2026-05-01 post-mortem as the *principled* chunker
+  metric — pool-independent, so the topic-orthogonality problem
+  disappears at the root rather than being mitigated by O20/O21. Notes
+  at [eval-harness/notes.md](./eval-harness/notes.md) → O22.
 
 ## Adding a new step
 
@@ -278,13 +505,3 @@ Workflow for a non-trivial step:
 **File structure** (loose convention; match what neighbouring folders do):
 TL;DR (3–5 lines) → scope/context → mechanism → rejected alternatives →
 open items → upstream references with URLs.
-
-## Related notes folders (not tied to a numbered step)
-
-Post-migration decisions that don't have their own step. Linked here so
-readers starting from plan.md can discover them:
-
-- [`normalize-flag-removal/`](./normalize-flag-removal/) — `--normalize-embeddings` flag removed (CLAUDE.md decision: **"--normalize-embeddings removed; encoder must ship Normalize module"**).
-- [`record-filtering/`](./record-filtering/) — record-filtering reason taxonomy and `missing_content_type` carve-out (CLAUDE.md decision: **"Record filtering — `missing_content_type` distinct from `content_type`"**).
-- [`transformers-v5-regression/`](./transformers-v5-regression/) — why `transformers` is pinned `<5` (CLAUDE.md decision: **"Transformers pinned `<5`"**).
-- [`upload-integrity/`](./upload-integrity/) — Ceph `MissingContentLength` workaround + post-upload verification (CLAUDE.md decision: **"Upload integrity"**).

@@ -3,7 +3,7 @@
 Matches the PCW baseline in LongEmbed (arxiv 2404.12096) and the
 Sentence-BERT convention. The only aggregation landed today;
 length-weighted, max, and friends are deferred (see
-``.progress/long-doc-chunking/notes.md``).
+``.history/long-doc-chunking/notes.md``).
 """
 
 from __future__ import annotations

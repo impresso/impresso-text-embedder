@@ -6,7 +6,7 @@ emitted as its own (over-budget) chunk; the encoder will truncate it.
 Preserves sentence boundaries — never splits mid-sentence.
 
 Rationale for picking this strategy as the first token-aware chunker:
-``.progress/long-doc-chunking/notes.md`` §"Question 1 — Chunking strategies"
+``.history/long-doc-chunking/notes.md`` §"Question 1 — Chunking strategies"
 option D.
 """
 

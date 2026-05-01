@@ -5,7 +5,7 @@ own tokenizer, slice the flat token-id list into contiguous non-overlapping
 windows of ``max_tokens`` ids, decode each slice back to a string. The
 resulting :class:`Chunk` list is fed to ``model.encode`` downstream, which
 re-tokenises each decoded string — a known redundancy (see the "Optimization
-level — L1" section of ``.progress/long-doc-chunking/notes.md``) kept
+level — L1" section of ``.history/long-doc-chunking/notes.md``) kept
 deliberately for simplicity. L2/L3 optimisations are deferred.
 
 Chosen as the step-16 default over :class:`TokenBudgetStrategy` because:

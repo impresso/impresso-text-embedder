@@ -6,7 +6,7 @@ A thin layer over ``sentence_transformers.SentenceTransformer`` that:
   * wraps ``encode(...)`` in a bf16 autocast on CUDA (Ampere/Hopper tensor cores);
   * leaves batch size to the caller.
 
-See ``.progress/gpu-throughput/notes.md`` for the rationale.
+See ``.history/gpu-throughput/notes.md`` for the rationale.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def _assert_built_in_normalize(
     The pipeline assumes encoder outputs are unit-norm — the cosine validation
     contract (``--tol 1e-4``) and ``MeanPoolStrategy``'s direction-only
     averaging both depend on it. Failing at load time turns that assumption
-    into a hard invariant. See ``.progress/normalize-flag-removal/notes.md``.
+    into a hard invariant. See ``.history/normalize-flag-removal/notes.md``.
     """
     from sentence_transformers.models import Normalize
 
@@ -132,7 +132,7 @@ def _assert_built_in_normalize(
             f"sentence_transformers.models.Normalize module "
             f"(last module is {type(last).__name__}). The pipeline requires "
             f"unit-norm encoder outputs; see "
-            f".progress/normalize-flag-removal/notes.md."
+            f".history/normalize-flag-removal/notes.md."
         )
 
 

@@ -13,7 +13,7 @@ Wires the root logger with:
 
 If ``/rcp-scratch`` is not mounted and no override is passed, the CLI
 exits non-zero with a clear message — no silent fallback. Rationale in
-``.progress/structured-logging/notes.md``.
+``.history/structured-logging/notes.md``.
 """
 
 from __future__ import annotations

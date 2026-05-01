@@ -1,0 +1,33 @@
+# Study B — "docs that exceed context".
+#
+# Research question:
+# "Of the strategies forced to do *something* on docs longer than the
+# model context, which loses least information?"
+#
+# Design implications baked into this config:
+# - Corpus is bounded below by 16384 tokens (2× context). At this
+#   floor, chunk_tokens=8190 produces ≥2 chunks on every doc, so it is
+#   genuinely chunking work and not a pass-through. At smaller chunk
+#   sizes the chunk count grows correspondingly.
+# - The full grid {512..8190} is meaningful here because every cell
+#   actually fires.
+# - The S0 truncate baseline is informative — it loses real content
+#   beyond 8190 tokens, so any chunked scenario that beats it on
+#   Recall@k is recovering information truncate dropped.
+#
+# Eligibility-pool sizing at min_tokens=16384 — likely tight on de
+# given the step-1 scan tabled fr=4050 / de=1550 at ≥8000 tokens.
+# Verify pool sizes before locking n_per_lg; consider lowering de's
+# threshold (e.g. 12288) or accepting asymmetric N per language.
+
+extends: base.yaml
+
+study:
+  name: "B-overflow"
+
+corpus:
+  min_tokens: 16384
+
+scenarios:
+  # 5 sizes × 3 chunkers + 1 truncate baseline = 16 scenarios.
+  chunk_sizes: [512, 1024, 2048, 4096, 8190]

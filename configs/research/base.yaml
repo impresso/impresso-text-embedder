@@ -1,0 +1,70 @@
+# Cross-study invariants for the chunking-eval research.
+#
+# This file is a partial — it intentionally omits the per-study fields
+# (study.name, corpus.min_tokens, scenarios.chunk_sizes) so loading it
+# standalone errors at validation time. Studies declare
+# `extends: base.yaml` and override only the fields that differentiate
+# them.
+#
+# Schema definition: src/impresso_text_embedder/research/study_config.py
+
+s3:
+  bucket: 140-processed-data-sandbox
+  rebuilt_bucket: 122-rebuilt-final
+
+paths:
+  # All study artefacts share one prefix on each side. Filenames
+  # (manifest.jsonl, corpus.jsonl.bz2, queries.jsonl.bz2, S0..SN.jsonl.bz2)
+  # are convention; see CORPUS_FILENAME / QUERIES_FILENAME / MANIFEST_FILENAME
+  # / scenario_filename() in research/study_config.py.
+  local_root: "tmp/chunking-eval/{study}"
+  s3_root:    "chunking-eval/{study}"
+
+corpus:
+  input_path: "tmp/115-canonical-processed-final-langident-langident-lid-ensemble_multilingual_v2-0-2__AGGREGATED.jsonl"
+  languages: [fr, de]
+  ocrqa_min: 0.9
+  year_min: 1950
+  year_max: 1980
+  providers:
+    fr: [BNF, LeTemps, SNL, FedGaz]
+    de: [SNL, FedGaz, BNL]
+  chars_per_token:
+    fr: 3.688
+    de: 4.281
+  n_per_lg: 300
+  seed: 42
+  # min_tokens, max_tokens — set per study
+
+embed:
+  model_name: "Alibaba-NLP/gte-multilingual-base"
+  model_revision: "f7d567e"
+  precision: bf16
+  attention: xformers
+  unpad_inputs: true
+  min_char_length: 0
+
+scenarios:
+  truncate_baseline: true
+  chunkers: [fixed-window, token-budget, semantic]
+  aggregator: mean
+  # chunk_sizes — set per study
+
+query_generation:
+  endpoint: "https://inference.rcp.epfl.ch/v1"
+  model: "Qwen/Qwen3-30B-A3B-Instruct-2507"
+  max_parallel: 2
+  temperature: 0.7
+  max_output_tokens: 1500
+  request_timeout_s: 120.0
+  retry_attempts: 5
+  # Bucket count = len(position_buckets); labels drive query_id and the
+  # `position_bucket` field on emitted records. Studies with longer docs
+  # (e.g. study-B-overflow) can override this list to get finer
+  # stratification — quintile buckets become a one-line edit.
+  position_buckets: [head, mid, tail]
+  # Per (doc, bucket, query_type) cell. Default 1 = 6 queries/doc with
+  # the head/mid/tail × question/topical-phrase grid. Raise for N x LLM
+  # cost and N x statistical power; query_id always carries the
+  # __NN suffix so consumers don't need to switch parsers.
+  queries_per_bucket: 1

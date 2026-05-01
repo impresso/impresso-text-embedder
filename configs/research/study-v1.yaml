@@ -1,0 +1,28 @@
+# Frozen snapshot of the pre-refactor research defaults.
+#
+# Running the refactored pipeline against this config must produce a
+# manifest with the same 400 ci_ids in the same order as the existing
+# `chunking-eval/corpus/corpus-v1.jsonl.bz2` artefact. Once that
+# regression check is green, this file survives one cycle as a sanity
+# reference and can then be removed.
+#
+# The new artefacts land at `chunking-eval/v1/...` (per-study prefix);
+# the old `chunking-eval/corpus/corpus-v1.jsonl.bz2` is intentionally
+# orphaned — content is what gets compared, not the path.
+
+extends: base.yaml
+
+study:
+  name: "v1"
+
+corpus:
+  # Pre-refactor default: ≥ 4000 raw tokens, no upper bound.
+  # Empirically lets the chunk grid up to 8190 collapse on the upper
+  # rows (>=90% of docs ≤ 8192 tokens go through one-shot at
+  # chunk_tokens=8190) — that is the bug step 5 is being built to
+  # prevent. Preserved here so the refactor is bisectable.
+  min_tokens: 4000
+
+scenarios:
+  # Pre-refactor 16-row grid: truncate baseline + (3 chunkers × 5 sizes).
+  chunk_sizes: [512, 1024, 2048, 4096, 8190]

@@ -11,7 +11,7 @@ Usage from :mod:`pipeline`::
 
 Both ``StageTimer`` and ``GpuSampler`` no-op cleanly when their dependencies
 are missing (``pynvml`` absent, no CUDA device). See
-``.progress/io-throughput/notes.md`` for the rationale.
+``.history/io-throughput/notes.md`` for the rationale.
 """
 
 from __future__ import annotations

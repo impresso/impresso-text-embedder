@@ -30,7 +30,7 @@ dependencies = [
     # capped at <5: v5's meta-device loading corrupts `persistent=False` buffers
     # (specifically `position_ids` on Alibaba-NLP/new-impl), producing a CUDA
     # IndexKernel assert at `rope_cos[position_ids]` on any input. See
-    # `.progress/transformers-v5-regression/notes.md`.
+    # `.history/transformers-v5-regression/notes.md`.
     "sentence-transformers>=3.0,<5.2",
     "torch>=2.2",
     "transformers>=4.46,<5",
@@ -38,9 +38,42 @@ dependencies = [
     "boto3>=1.36.5",
     "python-dotenv>=1.0",
     "tqdm>=4.66",
+    # chonkie cannot be bumped to ≥1.5 inside the production container:
+    # 1.5+ pins numpy>=2.0, and NGC's `numpy==1.26.4` is load-bearing for
+    # the apex/NCCL/transformer-engine ABI stack (Dockerfile asserts on
+    # 1.26.x). SemanticStrategy compensates with version-tolerant
+    # adapters (kwarg-name detection + an in-house tokenizer adapter that
+    # exposes `count_tokens_batch`), so we can stay on whatever chonkie
+    # the resolver picks. See .progress/semantic-chunker-fixes/notes.md.
     "chonkie>=0.2",
     "orjson>=3.10",
     "rich>=13",
+    # Used by impresso_text_embedder.research.query_generate for the
+    # OpenAI-compatible RCP AIaaS chat endpoint with structured output
+    # (Pydantic schema → JSON mode) and retry. Imports are lazy so
+    # production code paths and tests that don't exercise the LLM call
+    # don't pay the module-load cost.
+    "langchain-core>=0.3,<1.0",
+    "langchain-openai>=0.3,<1.0",
+    # YAML-driven study configs for the chunking-eval research
+    # (impresso_text_embedder.research.study_config). Imported lazily
+    # inside load_study_config so production code paths and tests that
+    # build configs in-memory don't pay the parser cost.
+    "pyyaml>=6.0",
+    # Static-embedding backend for chonkie's SemanticChunker. Chonkie
+    # imports it via its own `embeddings.auto` dispatch when the
+    # `embedding_model` argument resolves to a Model2Vec repo (e.g.
+    # `minishlab/potion-base-8M`, the default for SemanticStrategy);
+    # without it chonkie warns and falls back to SentenceTransformer,
+    # which loads a real ST model and runs an autograd-free encode pass
+    # per sentence — slower and non-deterministic. Pure-Python on top
+    # of numpy, ABI-safe with NGC's numpy 1.26.x. Used by the research
+    # sweep's S11–S15 (semantic family); harmless on production paths
+    # that don't construct a SemanticStrategy. Lives in core deps
+    # rather than `[research]` because it's a runtime dependency of
+    # bundled code, not notebook-only tooling. See
+    # .progress/semantic-chunker-fixes/notes.md.
+    "model2vec>=0.3",
 ]
 
 [project.optional-dependencies]
@@ -56,10 +89,33 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.5",
 ]
+# Notebook-driven analysis for the chunking-eval research. Lives in
+# notebooks/<study>-eval.ipynb and consumes
+# impresso_text_embedder.research.eval. Optional because the
+# production CLIs (and the research CLIs) do not depend on pandas /
+# seaborn / jupyter — keeping these out of the default install means
+# the production Docker image stays lean.
+research = [
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "seaborn>=0.13",
+    "matplotlib>=3.8",
+    "jupyterlab>=4.0",
+    "pyarrow>=15.0",
+]
 
 [project.scripts]
+# Production CLIs.
 impresso-embed-create = "impresso_text_embedder.cli.create:main"
 impresso-embed-validate = "impresso_text_embedder.cli.validate:main"
+# Research CLIs (chunking-eval branch). Off the production hot path; see
+# CLAUDE.md → "Branch goal — chunking-strategy evaluation".
+impresso-research-corpus-select = "impresso_text_embedder.research.corpus_select:main"
+impresso-research-corpus-fetch = "impresso_text_embedder.research.corpus_fetch:main"
+impresso-research-embed-sweep = "impresso_text_embedder.research.embed_sweep:main"
+impresso-research-query-generate = "impresso_text_embedder.research.query_generate:main"
+impresso-research-query-generate-local = "impresso_text_embedder.research.query_generate_local:main"
+impresso-research-query-embed = "impresso_text_embedder.research.query_embed:main"
 
 [project.urls]
 Homepage = "https://impresso-project.ch"

@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # Long-document handling at --embedding-level=text. Partial landing:
     # only the ``chunk`` strategy with ``mean`` aggregation is wired today.
-    # See .progress/long-doc-chunking/notes.md for the full design space
+    # See .history/long-doc-chunking/notes.md for the full design space
     # and the list of deferred strategies.
     p.add_argument(
         "--long-doc-strategy",
@@ -199,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "zero-indexed shard this job owns (use with --num-shards). "
             "Round-robin over list_objects_v2 lexicographic order; "
-            "see .progress/multi-gpu-sharding/notes.md."
+            "see .history/multi-gpu-sharding/notes.md."
         ),
     )
     p.add_argument(

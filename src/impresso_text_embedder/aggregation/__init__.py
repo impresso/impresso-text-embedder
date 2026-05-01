@@ -1,6 +1,6 @@
 """Aggregation strategies for combining chunk embeddings into one vector.
 
-See ``.progress/long-doc-chunking/notes.md`` for the full design-space.
+See ``.history/long-doc-chunking/notes.md`` for the full design-space.
 Only ``mean`` is registered today; more strategies plug in via
 :func:`register_strategy` without touching callers.
 """

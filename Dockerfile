@@ -11,8 +11,14 @@ RUN groupadd -g ${LDAP_GID} ${LDAP_GROUPNAME} \
  && useradd -u ${LDAP_UID} -g ${LDAP_GID} -m -s /bin/bash ${LDAP_USERNAME}
 
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml README.md ./
 COPY src ./src
+# Research-pipeline study configs. The sweep CLI takes `--config
+# configs/research/<study>.yaml` and resolves the path relative to the
+# container's WORKDIR, so the YAMLs must ship inside the image. Production
+# CLIs (`impresso-embed-create`, `impresso-embed-validate`) don't read
+# anything from configs/, so this is research-only weight.
+COPY configs ./configs
 
 # Install the package. NGC's bundled torch satisfies torch>=2.2 — pip will
 # leave it alone (we deliberately don't reinstall to keep CUDA/NCCL/apex

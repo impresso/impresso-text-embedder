@@ -4,7 +4,7 @@ Two modes:
   * structural — lines parse, fields present, embeddings same length, no NaN/Inf;
   * comparison against a target file — cosine distance per matching record/item.
 
-See ``.progress/validation-metric/notes.md`` for the metric choice.
+See ``.history/validation-metric/notes.md`` for the metric choice.
 """
 
 from __future__ import annotations

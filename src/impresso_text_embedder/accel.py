@@ -3,7 +3,7 @@
 Profile carries only the default batch size and a display name. Attention
 kernel selection is transparent: xformers' ``memory_efficient_attention``
 dispatches to FA3 on Hopper and FA2 on Ampere on its own, based on the
-device + dtype of Q/K/V. See ``.progress/gpu-profiles/notes.md``.
+device + dtype of Q/K/V. See ``.history/gpu-profiles/notes.md``.
 """
 
 from __future__ import annotations

@@ -1,369 +1,239 @@
-# impresso-text-embedder
+# impresso-text-embedder — `research/chunking-eval`
 
-> **GPU-bound batch embedder** for [Impresso](https://impresso-project.ch) content items.
-> Reads yearly `.jsonl.bz2` shards from S3, embeds them with
-> [`Alibaba-NLP/gte-multilingual-base`](https://huggingface.co/Alibaba-NLP/gte-multilingual-base)
-> via `sentence-transformers`, and writes the results back one-output-per-input.
+> **Side-research branch.** Chunking-strategy evaluation for
+> [Impresso](https://impresso-project.ch) document embeddings. The
+> production embedder ships from `main`; this branch never embeds the
+> full Impresso corpus and is **not intended to merge back**.
 
-| Script                    | Purpose                                                         |
-| ------------------------- | --------------------------------------------------------------- |
-| `impresso-embed-create`   | Walk a provider tree and embed every shard it finds.            |
-| `impresso-embed-validate` | Structural check, or per-record cosine comparison + diagnostics. |
+Locked scope, research question, and inherited decisions in
+[`CLAUDE.md`](./CLAUDE.md). Live ledger of work on this branch in
+[`.progress/plan.md`](./.progress/plan.md).
 
+## Workflow
+
+```
+corpus_select  →  corpus_fetch  ──────────────────────────→  embed_sweep
+  manifest        corpus.jsonl.bz2                            N jsonl shards
+                       │                                      (1 per scenario)
+                       ↓
+                  query_generate  →  query_embed
+                  queries.jsonl.bz2  queries-embedded.jsonl.bz2
+                  (synthetic LLM)    (1 vector per query)
+```
+
+Every stage reads a **single study YAML** under `configs/research/`.
+The shipped studies:
+
+| Study              | Corpus filter            | Scenarios | Question |
+| ------------------ | ------------------------ | --------- | -------- |
+| `study-v1`         | `min_tokens=4000`        | 16        | Frozen pre-refactor snapshot — regression reference. |
+| `study-A-fit`      | `4096 ≤ tokens ≤ 8192`   | 13        | Sub-context chunking vs one-shot — no-loss baseline. |
+| `study-B-overflow` | `tokens ≥ 16384`         | 16        | Of the strategies forced to do something, which loses least? |
+
+Schema in `src/impresso_text_embedder/research/study_config.py`.
 
 ## Install
 
-Requires **Python ≥ 3.10**.
-
-### With [uv](https://docs.astral.sh/uv/) — recommended
-
-Uses the committed lockfile for reproducible installs.
+Requires **Python ≥ 3.10**. Pinned with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync --extra dev
-source .venv/bin/activate
+cp .env.example .env   # then fill in SE_* and RCP_API_KEY
 ```
 
-### With pip / venv
+`pip install -e '.[dev]'` works too. `pytest` + `ruff check .` for the
+test suite.
+
+## Run a study
+
+Pick a study with `STUDY=...` (default `study-v1`). All four targets
+forward `--config configs/research/$(STUDY).yaml`.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
+# 1 — laptop / login node
+make STUDY=study-A-fit research-corpus-select
+make STUDY=study-A-fit research-corpus-fetch
+make STUDY=study-A-fit research-query-generate          # AIaaS (default)
+# or, on RCP / Run:AI when you want a self-contained run:
+make STUDY=study-A-fit runai-submit-query-generate-local
+
+# 2 — list the registry derived from the study YAML
+make STUDY=study-A-fit research-list-scenarios
+
+# 3 — RCP / Run:AI: one runai job per scenario
+make STUDY=study-A-fit runai-submit-research-all
+# or one specific scenario:
+make STUDY=study-A-fit runai-submit-research SCENARIO=S3
+
+# 4 — RCP / Run:AI: encode the queries once into a per-query
+# sidecar that the eval step joins against. One job per study.
+make STUDY=study-A-fit runai-submit-query-embed
 ```
 
-### Credentials
+### Query generation: AIaaS or CaaS
 
-Copy the template and fill in the blanks — the resulting `.env` is gitignored:
+Step 4 ships **two interchangeable backends** for the synthetic
+`(query, gold_excerpts)` set. Both read the same study YAML, share
+the same prompts, the same `QueryOutput` schema, the same
+verbatim-anchor verification, and write the same
+`queries.jsonl.bz2` shape — the eval step downstream cannot tell
+them apart beyond the `gen_endpoint` field on each record.
+
+| Backend                             | Where the LLM runs                                                                | Auth needed                            | Wallclock (study-v1, ~2400 generations) | When to pick                                                                                          |
+| ----------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **AIaaS** (default)                 | EPFL RCP AIaaS endpoint (`https://inference.rcp.epfl.ch/v1`, OpenAI-compatible)   | `RCP_API_KEY` in `.env`                | ~60–100 min at the 2-parallel cap       | Laptop / login-node runs; you don't need a GPU; AIaaS is up and not throttled.                        |
+| **CaaS** (`*-local` Make targets)   | Local `transformers.AutoModelForCausalLM` (bf16 + SDPA Flash-Attn-2) inside the production Run:AI image | none (model weights cached in `HF_HOME`) | ~80 min on a single H100, single inflight | RCP / Run:AI run that needs to be self-contained; AIaaS throttled or unavailable; reproducibility-locked study runs. |
 
 ```bash
-cp .env.example .env
+# AIaaS — laptop / login node
+make STUDY=study-A-fit research-query-generate
+
+# CaaS — Run:AI (one job per study, one GPU)
+make STUDY=study-A-fit runai-submit-query-generate-local
+# CaaS — laptop / GPU host smoke test
+make STUDY=study-A-fit research-query-generate-local \
+     QUERY_GEN_LOCAL_ARGS="--no-upload --limit 1"
 ```
 
-| Variable                                          | Purpose                                 | Needed for                                 |
-| ------------------------------------------------- | --------------------------------------- | ------------------------------------------ |
-| `SE_ACCESS_KEY`, `SE_SECRET_KEY`, `SE_HOST_URL`   | S3 credentials (Switch Engines).        | Every CLI run.                             |
-| `HARBOR_ROBOT_USERNAME`, `HARBOR_ROBOT_PASSWORD`  | Harbor registry robot account.          | Container push + Run:AI pull secret only.  |
+Both targets honour `STUDY=...` for the study YAML, and forward
+extras via `QUERY_GEN_ARGS=` (AIaaS) and `QUERY_GEN_LOCAL_ARGS=`
+(CaaS). The CaaS path defaults to the same model the AIaaS path
+uses (`Qwen/Qwen3-30B-A3B-Instruct-2507`); override with
+`--model`, attention with `--attention {sdpa,flash_attention_2,eager}`,
+weights dtype with `--dtype {bf16,fp16,fp32}`. Design rationale and
+rejected alternatives in
+[`.progress/query-generation/notes.md`](./.progress/query-generation/notes.md).
 
-## Create embeddings
+Each scenario writes to a per-study, per-scenario S3 prefix:
 
-### Minimal run
+```
+s3://140-processed-data-sandbox/chunking-eval/<study>/embeddings/<id>_<label>/corpus.jsonl.bz2
+```
 
-Embed every shard under a provider:
+so concurrent jobs and concurrent studies never collide. Job names
+include the study (`embed-sweep-A-fit-s3`).
+
+### Local smoke test
 
 ```bash
-impresso-embed-create \
-  --provider SNL \
-  --input-bucket  22-rebuilt-final \
-  --output-bucket 42-processed-data-final
+impresso-research-embed-sweep \
+  --config configs/research/study-v1.yaml \
+  --scenario S3 \
+  --local-corpus tmp/chunking-eval/v1/corpus.jsonl.bz2 \
+  --local-output tmp/S3.jsonl.bz2 \
+  --no-upload
 ```
 
-### Inspect, then execute
+Per-flag CLI args (`--limit`, `--batch-size`, `--n-per-lg`, etc.)
+override the YAML field-by-field for one-off experiments.
 
-List what *would* be processed:
+## Authoring a new study
 
 ```bash
-impresso-embed-create --provider SNL \
-  --alias EXP GDL --year-min 1910 --year-max 1920 \
-  --limit 3 --dry-run
+cp configs/research/study-A-fit.yaml configs/research/study-mine.yaml
+# edit study.name + the corpus/scenarios deltas
+uv run python -m impresso_text_embedder.research.scenario_builder \
+  --config configs/research/study-mine.yaml --list-table
 ```
 
-Then run for real:
+The Pydantic loader rejects unknown keys, missing required fields,
+incoherent token bounds, and path templates without a `{study}`
+placeholder — typos fail at load time, not three hours into a sweep.
+Single-level `extends:` only; chained inheritance is rejected.
 
-```bash
-impresso-embed-create --provider SNL \
-  --alias EXP GDL --year-min 1910 --year-max 1920 \
-  --batch-size 64
-```
+## Output records
 
-> [!TIP]
-> Existing outputs are skipped when the input hasn't changed (S3 `LastModified` comparison).
-> Pass `--force` to reprocess unconditionally.
+**Per-scenario shard** (`embed_sweep`, one JSONL line per content
+item). Production text-level fields (`ci_id`, `model_id`,
+`embedding`, `size`, `ts`, `ci_type`) plus research metadata
+carried through from the manifest (`lg`, `year`, `provider`,
+`alias`, `ocrqa`, `len_chars`) plus sweep annotations (`n_chunks`,
+`scenario_id`, `chunker`, `chunk_tokens`) plus study provenance
+(`study_name`, `study_config_sha`). Schema details in
+`.progress/embedding-sweep/notes.md`.
 
-### Argument defaults
-
-Run `impresso-embed-create --help` for the flat list.
-
-<details>
-<summary>Grouped reference (click to expand)</summary>
-
-#### Selection — what to process
-
-| Flag                          | Default                       | Notes                                                                  |
-| ----------------------------- | ----------------------------- | ---------------------------------------------------------------------- |
-| `--provider`                  | *required*                    | Provider code, e.g. `SNL`.                                             |
-| `--alias` *(repeatable)*      | *all aliases*                 | Filter to the listed aliases.                                          |
-| `--year-min` / `--year-max`   | *no bound*                    | Skip shards outside this inclusive year range.                         |
-| `--limit`                     | *none*                        | Process at most the first N shards (lex S3 order, before skip-check).  |
-| `--input-bucket`              | `122-rebuilt-final`           | Holds `<provider>/<alias>/*.jsonl.bz2`.                                |
-| `--output-bucket`             | `140-processed-data-sandbox`  | Outputs mirror input under `embeddings/docs/<model-slug>/`.            |
-| `--input-prefix`              | `""`                          | Optional prefix inside the input bucket.                               |
-
-#### Model & output shape
-
-| Flag                  | Default                              | Notes                                              |
-| --------------------- | ------------------------------------ | -------------------------------------------------- |
-| `--model-name`        | `Alibaba-NLP/gte-multilingual-base`  | HuggingFace model id.                              |
-| `--model-revision`    | `f7d567e`                            | HF commit pin; not appended to the output slug.    |
-| `--embedding-level`   | `text`                               | `text` / `sentence` / `chunk`.                     |
-| `--chunking-strategy` | `semantic`                           | Used only when `--embedding-level=chunk`.          |
-
-#### Record filtering
-
-| Flag                | Default | Notes                                                                |
-| ------------------- | ------- | -------------------------------------------------------------------- |
-| `--min-char-length` | `800`   | Skip records whose reconstructed text is shorter.                    |
-| `--content-type`    | `ar`    | Keep only records whose `tp` is in this allow-list (`ar` / `page`).  |
-
-#### Long-document handling
-
-| Flag                      | Default                       | Notes                                                                                        |
-| ------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
-| `--long-doc-strategy`     | `chunk`                       | `chunk` (split + aggregate) or `truncate` (legacy pre-step-16).                              |
-| `--long-doc-chunk-tokens` | *auto, tokenizer-derived*     | `model_max_length − num_special_tokens_to_add(pair=False)` (8190 for gte-multilingual-base). |
-| `--long-doc-aggregation`  | `mean`                        | Only choice today.                                                                           |
-
-#### Performance / GPU
-
-| Flag                                            | Default                       | Notes                                                                                        |
-| ----------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
-| `--batch-size`                                  | *auto, per GPU profile*       | A100=64, H100/H200=128, other CUDA=32, CPU=8.                                                |
-| `--precision`, `--attention`, `--unpad-inputs`  | bf16 / xformers / on          | Numerical-ablation levers — see [Numerical-ablation toggles](#numerical-ablation-toggles).   |
-
-#### Sharding & run modes
-
-| Flag                            | Default | Notes                                                                                       |
-| ------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| `--shard-index` / `--num-shards`| `0` / `1` | Round-robin partition over `list_objects_v2` lex order. See [Multi-shard runs](#multi-shard-runs-horizontal-throughput). |
-| `--force`                       | `False` | Reprocess even if output exists on S3.                                                      |
-| `--dry-run`                     | `False` | List files; no model load, no writes.                                                       |
-
-#### Logging
-
-| Flag                | Default                                       | Notes                                                                                       |
-| ------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `--log-level-file`  | `INFO`                                        | `DEBUG` / `INFO` / `WARNING` / `ERROR`.                                                     |
-| `--log-dir`         | `/rcp-scratch/<user>/experiments/embeddings`  | Full path: `<log-dir>/<YYYY-MM-DD>/<provider>.log` (or `<provider>-shard-<i>-of-<N>.log` when `--num-shards` > 1). |
-
-</details>
-
-### Embedding levels
-
-`--embedding-level` picks **what** gets embedded. It is independent of the
-chunking registry, which only applies at `chunk` level.
-
-| Level                | Produces                                    | Long-text handling                                                                                                       |
-| -------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `text` *(default)*   | One vector per content item.                | Docs > 8192 tokens are chunked (`fixed-window`) and mean-pooled into one vector. Opt out with `--long-doc-strategy truncate`. |
-| `sentence`           | One vector per pre-tokenised `sents` entry. | No chunker runs.                                                                                                         |
-| `chunk`              | One vector per chunk.                       | `--chunking-strategy` selects `semantic` (default) or `token-budget`.                                                    |
-
-> [!NOTE]
-> `text` and `sentence` are *embedding levels*, not chunking strategies —
-> they do not appear in the chunking registry.
-
-### Numerical-ablation toggles
-
-Three flags expose the post-migration fast-path levers. Defaults preserve
-the historical fast path — running with no overrides reproduces today's
-outputs — but each can be flipped independently to bisect drift against
-an older baseline.
-
-| Flag                                  | Default     | What it controls                                                                                                                                                           | Reference                                                                                                                                                                     |
-| ------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--precision {bf16,fp32}`             | `bf16`      | Whether `model.encode()` runs inside a `torch.autocast(dtype=bfloat16)` scope on CUDA. `fp32` skips the autocast; model weights are fp32 either way.                       | [PyTorch blog — What every user should know about mixed precision training](https://pytorch.org/blog/what-every-user-should-know-about-mixed-precision-training-in-pytorch/) |
-| `--attention {xformers,eager}`        | `xformers`  | Whether `use_memory_efficient_attention=True` is set on the model config. Alibaba's modeling file then routes attention through `xformers.ops.memory_efficient_attention` (which dispatches to FA2 on Ampere, FA3 on Hopper). `eager` omits the flag and uses the model's default attention path. | [HuggingFace — Flash Attention (concept)](https://huggingface.co/docs/text-generation-inference/conceptual/flash_attention)                                                    |
-| `--unpad-inputs` / `--no-unpad-inputs`| `True`      | Whether `unpad_inputs=True` is set on the model config. The modeling file then strips padding tokens before attention so variable-length sequences don't waste FLOPs on PADs. | [HF blog — Packing with Flash Attention 2](https://huggingface.co/blog/packing-with-FA2)                                                                                      |
-
-> [!TIP]
-> Typical bisection grid against a legacy baseline: defaults / `--precision fp32` /
-> `--attention eager` / all three flipped. Whichever combination collapses
-> drift to ~zero identifies the responsible lever. `--attention=xformers`
-> with no CUDA device or no importable `xformers` package fails fast at model
-> load — no silent fallback.
-
-## Validate an output file
-
-### Structural only
-
-Schema shape, dimensionality, absence of NaNs:
-
-```bash
-impresso-embed-validate s3://<bucket>/.../EXP-1912.jsonl.bz2
-```
-
-### Against a reference
-
-Per-record cosine comparison (default tolerance `1e-4`):
-
-```bash
-impresso-embed-validate \
-  s3://<bucket>/.../EXP-1912.jsonl.bz2 \
-  --target s3://<bucket>/golden/EXP-1912.jsonl.bz2
-```
-
-### With drift diagnostics
-
-Add `--source <input.jsonl.bz2>` to surface char-length histograms,
-`lg` / `tp` breakdowns, and worst-drift excerpts for records that mismatched
-or went missing:
-
-```bash
-impresso-embed-validate \
-  s3://<bucket>/.../EXP-1912.jsonl.bz2 \
-  --target s3://<bucket>/golden/EXP-1912.jsonl.bz2 \
-  --source s3://<bucket>/inputs/EXP-1912.jsonl.bz2
-```
-
-### Export to CSV
-
-`--csv-out <dir>` dumps mismatches as spreadsheet-friendly CSVs alongside the Rich panels:
-
-```bash
-impresso-embed-validate s3://.../EXP-1912.jsonl.bz2 \
-  --target s3://.../golden/EXP-1912.jsonl.bz2 \
-  --source s3://.../inputs/EXP-1912.jsonl.bz2 \
-  --csv-out ./out
-```
-
-| File                  | One row per                              | Columns                                                |
-| --------------------- | ---------------------------------------- | ------------------------------------------------------ |
-| `above_threshold.csv` | record whose cosine distance > `--tol`   | `ci_id, url, distance, lg, tp, char_length`            |
-| `missing.csv`         | record present on only one side          | `ci_id, url, direction, lg, tp, char_length`           |
-
-`url` links to the Impresso web app. `lg` / `tp` / `char_length` are populated only with `--source`; sentence/chunk runs append `item_id, id_key`. Exit code is `0` on pass, non-zero on failure.
+**Queries-embedded shard** (`query_embed`, one JSONL line per
+query). Production text-level primitives (`ci_id`, `model_id`,
+`embedding`, `size`, `ts`) plus query identity (`query_id`) plus
+the eval-relevant query metadata mirrored verbatim from
+`queries.jsonl.bz2` (`lg`, `query_type`, `position_bucket`,
+`position_chars`, `references`, `query_text`) plus the same
+`study_name` / `study_config_sha` provenance. Schema details in
+`.progress/query-embed/notes.md`.
 
 ## Logging
 
-| Destination | Contents                                                                                             | Controlled by                   |
-| ----------- | ---------------------------------------------------------------------------------------------------- | ------------------------------- |
-| Terminal    | Single `tqdm` bar with per-file postfix `dl=…s enc=…s up=…s gpu=…%`.                                 | (always on)                     |
-| Disk        | Full `INFO` log at `/rcp-scratch/<user>/experiments/embeddings/<YYYY-MM-DD>/<provider>.log`.         | `--log-dir`, `--log-level-file` |
-
-Outside RCP, `--log-dir` is required — the CLI exits non-zero rather than
-falling back silently.
-
-## Development
-
-```bash
-pytest
-ruff check .
-```
-
-Repo map:
-
-- **`src/impresso_text_embedder/`** — package source.
-- **`tests/`** — unit + integration tests.
-- **`.progress/<slug>/notes.md`** — design notes per subsystem.
+Sweep runs log a full INFO stream to
+`/rcp-scratch/<user>/experiments/chunking-eval/<date>/<scenario_id>.log`
+with a `tqdm` progress bar on the terminal (only `ERROR` records
+echo, routed through `tqdm.write`). Outside RCP pass `--log-dir
+<path>` — the CLI exits non-zero rather than falling back silently.
 
 ## Run on EPFL RCP / Run:AI
 
 ```bash
-cp .env.docker.example .env.docker       # LDAP UID/GID, registry, project
-make docker-build-push                   # build linux/amd64 → Harbor
-make k8s-create-secrets                  # S3 + Harbor pull secret (idempotent)
-make runai-submit PROVIDER=BNL \
-     INPUT_BUCKET=22-rebuilt-final \
-     OUTPUT_BUCKET=42-processed-data-final \
-     EMBED_EXTRA_ARGS="--embedding-level text --batch-size 64"
+cp .env.docker.example .env.docker          # LDAP UID/GID, registry, project
+make docker-build-push                      # linux/amd64 -> Harbor
+make k8s-create-secrets                     # S3 + Harbor pull (idempotent)
+make STUDY=study-A-fit runai-submit-research-all
 ```
 
-Pass these as **make variables** (`NAME=value`), not CLI flags (`--name=value`) —
-`make` parses anything starting with `--` as one of its own options and rejects it.
-CLI flags for `impresso-embed-create` go inside `EMBED_EXTRA_ARGS="…"`.
+The image tag defaults to the current git branch (slashes → dashes),
+so this branch pushes to
+`<registry>/<project>/<image>:research-chunking-eval`. `make help`
+shows the resolved tag and every target.
 
-`make help` lists every target. See [`.progress/docker-runai/`](./.progress/docker-runai/)
-for setup rationale and the secret conventions.
-
-### Picking the GPU and sizing the pod
-
-`RUNAI_NODE_POOL` picks the pool (`default` = A100, `h100`, `v100`).
-`RUNAI_GPU_TYPE` pins the GPU product *within* the pool — the only way to
-split H100 vs H200, since `--node-pools` doesn't distinguish them. Find the
-labels on RCP with `kubectl get nodes -L nvidia.com/gpu.product`. Same image
-runs on all three; `accel.py` auto-detects the arch at startup.
-
-`RUNAI_CPU` / `RUNAI_MEMORY` (with optional `RUNAI_CPU_LIMIT` /
-`RUNAI_MEMORY_LIMIT`) request resources explicitly so the 10-way S3
-prefetch + encode + upload overlap isn't starved by noisy neighbours.
-A reasonable starting point is `RUNAI_CPU=8 RUNAI_MEMORY=32G`; tune from
-the per-file `dl=…s enc=…s up=…s` postfix on the `tqdm` bar. Unset →
-namespace default applies.
+Pick GPU / size pod:
 
 ```bash
-make runai-submit PROVIDER=BNL \
-     INPUT_BUCKET=22-rebuilt-final \
-     OUTPUT_BUCKET=42-processed-data-final \
-     RUNAI_NODE_POOL=h100 RUNAI_GPU_TYPE=NVIDIA-H200-141GB \
+make STUDY=study-A-fit runai-submit-research-all \
+     RUNAI_NODE_POOL=h100 RUNAI_GPU_TYPE=NVIDIA-H100-80GB-HBM3 \
      RUNAI_CPU=8 RUNAI_MEMORY=32G
 ```
 
-### Multi-shard runs (horizontal throughput)
+H200 lives in the `h100` pool — find labels with
+`kubectl get nodes -L nvidia.com/gpu.product`. Same image runs on
+A100 / H100 / H200; `accel.py` auto-detects.
 
-Each Run:AI job owns one GPU. To process a provider in parallel across N
-GPUs, submit N independent jobs with disjoint file partitions:
-
-```bash
-make runai-submit-multi PROVIDER=BNL NUM_SHARDS=4 \
-     INPUT_BUCKET=22-rebuilt-final \
-     OUTPUT_BUCKET=42-processed-data-final \
-     EMBED_EXTRA_ARGS="--embedding-level text --batch-size 64"
-```
-
-`EMBED_EXTRA_ARGS` is forwarded to every shard so flags apply uniformly.
-This loops `i` from 0 to N-1 and submits a separate job for each shard.
-Each job runs `impresso-embed-create --shard-index i --num-shards N` and
-processes a round-robin partition of the file list (over
-`list_objects_v2`'s lexicographic order — deterministic, no coordination).
-Failed shards re-run idempotently via the existing
-`--skip-if-s3-exists` + input-newer-than-output check; just resubmit the
-same shard. Per-shard logs land at
-`<log-dir>/<YYYY-MM-DD>/<provider>-shard-<i>-of-<N>.log` so concurrent
-shards don't stomp each other.
-
-`make runai-submit-shard PROVIDER=BNL SHARD_INDEX=2 NUM_SHARDS=4` submits
-just one shard (handy for re-running a single failed shard). Defaults
-`SHARD_INDEX=0 NUM_SHARDS=1` reproduce the unsharded `runai-submit`
-behaviour. Design rationale and rejected alternatives in
-[`.progress/multi-gpu-sharding/`](./.progress/multi-gpu-sharding/).
-
-### Interactive debug shell
-
-For PVC / GPU / model-cache checks, or to run the CLI by hand:
+Interactive debug pod:
 
 ```bash
-make runai-interactive    # submit the debug pod
-make runai-bash           # shell in once it's Running
-make runai-delete-debug   # tear it down when done
+make runai-interactive && make runai-bash
+make runai-delete-debug    # tear down
 ```
 
-Override `RUNAI_DEBUG_JOB_NAME` / `RUNAI_DEBUG_GPU` via `make` to run several in parallel.
+## Repo map
 
----
+- **`configs/research/`** — study YAMLs (`base.yaml` + per-study).
+- **`src/impresso_text_embedder/research/`** — research CLIs +
+  schema (`study_config.py`) + scenario builder.
+- **`src/impresso_text_embedder/{embed,model,chunking,aggregation,...}`** —
+  production embedder modules; the research path reuses them as a
+  library and never touches their CLI surface.
+- **`tests/`** — flat `test_<module>.py`; CUDA / xformers / S3 mocked
+  at call sites so the suite runs CPU-only.
+- **`.progress/<slug>/notes.md`** + **`.progress/plan.md`** — current
+  research notes per step + live ledger.
+- **`.history/`** — frozen migration-era design narrative.
 
 ## About
 
 ### Impresso
 
-[Impresso - Media Monitoring of the Past](https://impresso-project.ch) is an
-interdisciplinary research project that aims to develop and consolidate tools for
-processing and exploring large collections of media archives across modalities, time,
-languages and national borders. The first project (2017-2021) was funded by the Swiss
-National Science Foundation under grant
-No. [CRSII5_173719](http://p3.snf.ch/project-173719) and the second project (2023-2027)
-by the SNSF under grant No. [CRSII5_213585](https://data.snf.ch/grants/grant/213585))
-and the Luxembourg National Research Fund under grant No. 17498891.
-
-### Copyrights
-
-Copyright (C) 2018-2024 The Impresso team.  
-Contributors to this program include: [Simon Clematide](https://github.com/simon-clematide)
+[Impresso — Media Monitoring of the Past](https://impresso-project.ch)
+is an interdisciplinary research project that develops tools for
+processing and exploring large media archives across modalities, time,
+languages and national borders. Impresso 1 (2017–2021) was funded by
+the SNSF under grant [CRSII5_173719](http://p3.snf.ch/project-173719);
+Impresso 2 (2023–2027) by the SNSF under grant
+[CRSII5_213585](https://data.snf.ch/grants/grant/213585) and the
+Luxembourg National Research Fund under grant 17498891.
 
 ### License
 
-This program is provided as open source under
-the [GNU Affero General Public License](https://github.com/impresso/impresso-pyindexation/blob/master/LICENSE)
-v3 or later.
+Provided as open source under the
+[GNU Affero General Public License](https://github.com/impresso/impresso-pyindexation/blob/master/LICENSE)
+v3 or later. Copyright (C) 2018–2024 The Impresso team.
 
 ---
 
