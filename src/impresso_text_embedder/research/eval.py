@@ -733,7 +733,10 @@ def score_queries(
     - ``query_id``, ``ci_id``, ``lg``, ``query_type``,
       ``position_bucket`` — query identity / stratification keys.
     - ``scenario_id``, ``scenario_label``, ``chunker``,
-      ``chunk_tokens`` — scenario stratification keys.
+      ``chunk_tokens``, ``aggregator`` — scenario stratification keys.
+      ``aggregator`` is ``"(none)"`` for the truncate baseline; for
+      multi-aggregator studies (e.g. ``C-aggregator``) it lets a
+      ``chunk_tokens × aggregator`` heatmap fall out of one groupby.
     - ``pool_size`` — same-language pool the rank is computed against.
     - ``rank`` — 1-based rank of gold ci_id (NaN if absent from pool).
     - ``reciprocal_rank`` — ``1/rank`` (NaN if absent).
@@ -791,6 +794,7 @@ def score_queries(
                 "scenario_label": scen.label,
                 "chunker": scen.chunker_name or "truncate",
                 "chunk_tokens": scen.chunk_tokens,
+                "aggregator": scen.aggregator_name or "(none)",
                 "pool_size": pool_size,
                 "n_chunks": meta[0] if meta is not None else None,
                 "n_tokens": meta[1] if meta is not None else None,
@@ -837,7 +841,9 @@ def aggregate_recall_with_ci(
     scores_df: Any,
     *,
     metric: str = "recall_at_5",
-    by: Sequence[str] = ("lg", "scenario_id", "scenario_label", "chunker", "chunk_tokens"),
+    by: Sequence[str] = (
+        "lg", "scenario_id", "scenario_label", "chunker", "chunk_tokens", "aggregator",
+    ),
     n_iter: int = 1000,
     ci: float = 0.95,
     seed: int = 42,
@@ -870,7 +876,9 @@ def baseline_delta_table(
     *,
     metric: str = "recall_at_5",
     baseline_id: str = "S0",
-    by: Sequence[str] = ("lg", "scenario_id", "scenario_label", "chunker", "chunk_tokens"),
+    by: Sequence[str] = (
+        "lg", "scenario_id", "scenario_label", "chunker", "chunk_tokens", "aggregator",
+    ),
     n_iter: int = 1000,
     ci: float = 0.95,
     seed: int = 42,

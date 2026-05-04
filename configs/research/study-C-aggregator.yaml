@@ -22,8 +22,8 @@
 # Seed once, then sweep:
 #   uv run impresso-research-study-seed \
 #     --source-config configs/research/study-A-fit.yaml \
-#     --target-config configs/research/C-aggregator.yaml
-#   make STUDY=C-aggregator runai-submit-research-all
+#     --target-config configs/research/study-C-aggregator.yaml
+#   make STUDY=study-C-aggregator runai-submit-research-all
 
 extends: base.yaml
 

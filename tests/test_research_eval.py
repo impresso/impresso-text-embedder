@@ -493,6 +493,7 @@ def test_score_queries_returns_tidy_dataframe(seeded_study):
         "scenario_label",
         "chunker",
         "chunk_tokens",
+        "aggregator",
         "pool_size",
         "rank",
         "reciprocal_rank",
@@ -502,6 +503,11 @@ def test_score_queries_returns_tidy_dataframe(seeded_study):
         "n_chunks",
     }
     assert expected_cols.issubset(df.columns)
+    # S0 baseline gets the literal "(none)"; chunked scenarios get the
+    # aggregator's registry name. Locks the multi-aggregator slicing
+    # contract used by C-aggregator-style studies.
+    assert set(df.loc[df["scenario_id"] == "S0", "aggregator"]) == {"(none)"}
+    assert set(df.loc[df["scenario_id"] != "S0", "aggregator"]) == {"mean"}
     # Per-language pool: fr queries see 2 fr docs, de queries see 2 de docs.
     fr_rows = df[df.lg == "fr"]
     assert (fr_rows.pool_size == 2).all()

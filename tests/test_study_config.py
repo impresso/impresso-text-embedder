@@ -586,7 +586,7 @@ def test_n_scenarios_multiplies_by_aggregators(tmp_path: Path) -> None:
 
 def test_repo_C_aggregator_yaml_loads() -> None:
     """The shipped C-aggregator study YAML must validate end-to-end."""
-    cfg_path = Path(__file__).parent.parent / "configs/research/C-aggregator.yaml"
+    cfg_path = Path(__file__).parent.parent / "configs/research/study-C-aggregator.yaml"
     cfg = sc.load_study_config(cfg_path)
     assert cfg.study.name == "C-aggregator"
     assert cfg.scenarios.chunkers == ("token-budget",)

@@ -162,10 +162,14 @@ get the literal string `(none)`.
   per-aggregator Recall@k / Precision_Ω deltas vs S0 into this notes
   file. Per the locked scope, only the winning aggregator from this
   sweep proceeds to the cross-chunker ablation.
-- O31 — Extend the eval (step 8) to surface the new `aggregator`
-  field as a stratification axis alongside `chunker` / `chunk_tokens`.
-  Currently the eval slices by `scenario_id` only; multi-aggregator
-  studies would benefit from a 2-D heatmap (chunk size × aggregator).
+- ~~O31 — Extend the eval (step 8) to surface the new `aggregator`
+  field as a stratification axis alongside `chunker` / `chunk_tokens`.~~
+  Closed: `score_queries` now emits an `aggregator` column;
+  `aggregate_recall_with_ci` and `baseline_delta_table` default `by=`
+  tuples include it. Singleton-aggregator studies (A-fit, B-overflow,
+  v1) are unaffected — every row gets `"mean"` and the groupby cell
+  count is unchanged. Multi-aggregator studies (C-aggregator) get the
+  `chunk_size × aggregator` heatmap from one groupby.
 - O32 — Decide whether `query-embed` outputs should also carry an
   `aggregator` field for symmetry. Today queries are never chunked
   (one short string, one vector), so the field would always be
@@ -182,7 +186,7 @@ Unit tests added in the same diff:
 - `tests/test_study_config.py`: parsing the `aggregators` field;
   mutual exclusivity vs `aggregator`; empty-list rejection;
   `n_scenarios()` accounts for the third dimension; loads
-  `configs/research/C-aggregator.yaml` end-to-end.
+  `configs/research/study-C-aggregator.yaml` end-to-end.
 - `tests/test_research_scenarios.py`: cartesian expansion arithmetic;
   size-major / agg-innermost order; label format switches only when
   plural; unknown aggregator name rejected; baseline still emits S0.
@@ -204,10 +208,10 @@ Smoke checks performed:
 - `python -m impresso_text_embedder.research.scenario_builder
   --config configs/research/study-A-fit.yaml --list-ids` returns
   exactly the pre-change ID sequence.
-- The same on `C-aggregator.yaml` returns 13 IDs S0..S12 with
+- The same on `study-C-aggregator.yaml` returns 13 IDs S0..S12 with
   size-major / agg-innermost label ordering.
 - `impresso-research-study-seed --source-config A-fit.yaml
-  --target-config C-aggregator.yaml --dry-run` prints 3 pairs, no
+  --target-config study-C-aggregator.yaml --dry-run` prints 3 pairs, no
   boto3 mutations.
 
 568/568 tests pass on the full suite after the change.

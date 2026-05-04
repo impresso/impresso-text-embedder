@@ -341,7 +341,7 @@ study corpus to confirm the shift holds at scale; drop the
 Realises the deferred "Length-weighted / max / first-chunk ablations" line
 from [Scope](#scope-locked-with-the-user) early on `token-budget` rather
 than waiting for a definitive winner from study-A-fit. New study
-`C-aggregator` at `configs/research/C-aggregator.yaml` pins the chunker
+`C-aggregator` at `configs/research/study-C-aggregator.yaml` pins the chunker
 to `token-budget` and sweeps all four registered aggregators (`mean`,
 `max`, `first-chunk`, `length-weighted`) at three sizes
 `[256, 1024, 4096]` — 13 scenarios total (1 truncate baseline + 1×3×4).
