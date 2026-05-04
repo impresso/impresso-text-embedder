@@ -335,3 +335,111 @@ class TestUploadLocalFile:
             io.upload_local_file(f, "b", "s3://k/leading")
         fake_bucket.upload_file.assert_called_once_with(str(f), "k/leading")
         fake_client.head_object.assert_called_once_with(Bucket="b", Key="k/leading")
+
+
+class TestCopyS3Object:
+    """Server-side copy via boto3 ``copy_object``.
+
+    All tests mock the boto3 client; no real S3 calls.
+    """
+
+    @staticmethod
+    def _client(
+        *,
+        src_bucket: str = "src-b",
+        src_key: str = "src/k",
+        dst_bucket: str = "dst-b",
+        dst_key: str = "dst/k",
+        dst_exists: bool = False,
+        src_size: int = 1024,
+        dst_size_after_copy: int | None = None,
+        copy_side_effect: BaseException | None = None,
+        src_head_side_effect: BaseException | None = None,
+    ) -> MagicMock:
+        """Build a client that routes head_object on (Bucket, Key) instead of call ordinal.
+
+        Tracks how many times the dst is HEAD-probed so post-copy
+        size-parity vs pre-existence checks can be told apart.
+        """
+        client = MagicMock()
+        copy_done = {"yes": False}
+
+        def head(Bucket, Key):
+            if Bucket == src_bucket and Key == src_key:
+                if src_head_side_effect is not None:
+                    raise src_head_side_effect
+                return {"ContentLength": src_size}
+            if Bucket == dst_bucket and Key == dst_key:
+                # After copy_object has fired, every dst HEAD is a
+                # post-copy size-parity probe.
+                if copy_done["yes"]:
+                    return {
+                        "ContentLength": (
+                            dst_size_after_copy if dst_size_after_copy is not None
+                            else src_size
+                        )
+                    }
+                # Pre-copy: the dst HEAD comes from head_last_modified.
+                if dst_exists:
+                    return {"LastModified": datetime(2024, 1, 1, tzinfo=timezone.utc)}
+                raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+            raise AssertionError(f"unexpected HEAD on s3://{Bucket}/{Key}")
+
+        def copy(**kwargs):
+            if copy_side_effect is not None:
+                raise copy_side_effect
+            copy_done["yes"] = True
+            return {}
+
+        client.head_object.side_effect = head
+        client.copy_object.side_effect = copy
+        return client
+
+    def test_copies_when_dst_missing(self):
+        client = self._client(src_size=2048)
+        with patch.object(io, "get_s3_client", return_value=client):
+            copied = io.copy_s3_object("src-b", "src/k", "dst-b", "dst/k")
+        assert copied is True
+        client.copy_object.assert_called_once_with(
+            CopySource={"Bucket": "src-b", "Key": "src/k"},
+            Bucket="dst-b",
+            Key="dst/k",
+        )
+
+    def test_skips_when_dst_exists_and_overwrite_false(self):
+        client = self._client(dst_exists=True)
+        with patch.object(io, "get_s3_client", return_value=client):
+            copied = io.copy_s3_object("src-b", "src/k", "dst-b", "dst/k")
+        assert copied is False
+        client.copy_object.assert_not_called()
+
+    def test_overwrites_when_dst_exists_and_overwrite_true(self):
+        client = self._client(dst_exists=True, src_size=4096)
+        with patch.object(io, "get_s3_client", return_value=client):
+            copied = io.copy_s3_object(
+                "src-b", "src/k", "dst-b", "dst/k", overwrite=True
+            )
+        assert copied is True
+        client.copy_object.assert_called_once()
+
+    def test_size_mismatch_after_copy_raises(self):
+        client = self._client(src_size=2048, dst_size_after_copy=1024)
+        with patch.object(io, "get_s3_client", return_value=client):
+            with pytest.raises(RuntimeError, match="size mismatch"):
+                io.copy_s3_object("src-b", "src/k", "dst-b", "dst/k")
+
+    def test_missing_source_raises(self):
+        err = ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        client = self._client(src_head_side_effect=err)
+        with patch.object(io, "get_s3_client", return_value=client):
+            with pytest.raises(RuntimeError, match="not found"):
+                io.copy_s3_object("src-b", "src/k", "dst-b", "dst/k")
+
+    def test_copy_object_failure_propagates_as_runtime(self):
+        err = ClientError(
+            {"Error": {"Code": "AccessDenied"}}, "CopyObject"
+        )
+        client = self._client(copy_side_effect=err)
+        with patch.object(io, "get_s3_client", return_value=client):
+            with pytest.raises(RuntimeError, match="copy_object"):
+                io.copy_s3_object("src-b", "src/k", "dst-b", "dst/k")

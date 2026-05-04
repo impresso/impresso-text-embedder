@@ -42,9 +42,16 @@ def build_scenarios(cfg: ScenariosConfig) -> list[Scenario]:
     """Expand ``cfg`` into an ordered list of :class:`Scenario` rows.
 
     Order: optional truncate baseline first (id ``S0``), then
-    ``chunkers × chunk_sizes`` in declaration order. The cheap rows
-    (large chunk sizes → fewer chunks → less compute) come last in
-    each chunker family so smoke-tests on ``S0..S2`` finish quickly.
+    ``chunkers × chunk_sizes × aggregators`` in declaration order with
+    aggregators as the **innermost** loop. When a study uses a single
+    aggregator (the singular ``aggregator:`` form), output is
+    bit-identical to the pre-multi-aggregator behaviour: same scenario
+    IDs, same labels — so A-fit / B-overflow / v1 keep their
+    ``config_sha``. When multiple aggregators are listed, the label
+    grows the ``-{agg}`` suffix and "all aggregators at one (chunker,
+    size) cell" is a contiguous slice of IDs, which matters for
+    smoke-testing the smallest cell first.
+
     Chunker and aggregator names are checked against the live
     registries; an unknown name aborts at config-build time, before
     any GPU is touched.
@@ -52,17 +59,21 @@ def build_scenarios(cfg: ScenariosConfig) -> list[Scenario]:
     known_chunkers = set(available_chunkers())
     known_aggregators = set(available_aggregators())
 
-    bad = [c for c in cfg.chunkers if c not in known_chunkers]
-    if bad:
+    bad_chunkers = [c for c in cfg.chunkers if c not in known_chunkers]
+    if bad_chunkers:
         raise ValueError(
-            f"unknown chunker(s) {bad}; registered: {sorted(known_chunkers)}"
+            f"unknown chunker(s) {bad_chunkers}; "
+            f"registered: {sorted(known_chunkers)}"
         )
-    if cfg.aggregator not in known_aggregators:
+    aggs = cfg.effective_aggregators()
+    bad_aggs = [a for a in aggs if a not in known_aggregators]
+    if bad_aggs:
         raise ValueError(
-            f"unknown aggregator {cfg.aggregator!r}; "
+            f"unknown aggregator(s) {bad_aggs}; "
             f"registered: {sorted(known_aggregators)}"
         )
 
+    label_with_agg = len(aggs) > 1
     out: list[Scenario] = []
     sid = 0
     if cfg.truncate_baseline:
@@ -78,16 +89,20 @@ def build_scenarios(cfg: ScenariosConfig) -> list[Scenario]:
         sid += 1
     for chunker in cfg.chunkers:
         for size in cfg.chunk_sizes:
-            out.append(
-                Scenario(
-                    id=f"S{sid}",
-                    label=f"{chunker}-{size}",
-                    chunker_name=chunker,
-                    chunk_tokens=size,
-                    aggregator_name=cfg.aggregator,
+            for agg in aggs:
+                label = (
+                    f"{chunker}-{size}-{agg}" if label_with_agg else f"{chunker}-{size}"
                 )
-            )
-            sid += 1
+                out.append(
+                    Scenario(
+                        id=f"S{sid}",
+                        label=label,
+                        chunker_name=chunker,
+                        chunk_tokens=size,
+                        aggregator_name=agg,
+                    )
+                )
+                sid += 1
     return out
 
 

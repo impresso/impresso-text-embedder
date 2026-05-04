@@ -344,3 +344,70 @@ def upload_local_file(local_path: str | Path, bucket: str, key: str) -> None:
         etag,
         is_multipart,
     )
+
+
+def copy_s3_object(
+    src_bucket: str,
+    src_key: str,
+    dst_bucket: str,
+    dst_key: str,
+    *,
+    overwrite: bool = False,
+) -> bool:
+    """Server-side copy ``s3://src_bucket/src_key`` to ``s3://dst_bucket/dst_key``.
+
+    Uses ``s3.copy_object``, which the storage backend executes without
+    streaming the body through the client — same Ceph bucket means a
+    pure metadata move. Idempotent: returns ``False`` without copying
+    when the destination already exists and ``overwrite=False``.
+
+    On any successful copy the destination is HEAD-checked and asserted
+    against the source's ``ContentLength`` so a partial server-side
+    copy doesn't silently land. Returns ``True`` when a copy happened.
+    """
+    s3 = get_s3_client()
+    if not overwrite and head_last_modified(dst_bucket, dst_key) is not None:
+        log.info(
+            "copy skipped: s3://%s/%s already exists (use overwrite=True to replace)",
+            dst_bucket,
+            dst_key,
+        )
+        return False
+
+    try:
+        src_head = s3.head_object(Bucket=src_bucket, Key=src_key)
+    except ClientError as exc:
+        raise RuntimeError(
+            f"source object s3://{src_bucket}/{src_key} not found: {exc}"
+        ) from exc
+    src_size = src_head["ContentLength"]
+
+    try:
+        s3.copy_object(
+            CopySource={"Bucket": src_bucket, "Key": src_key},
+            Bucket=dst_bucket,
+            Key=dst_key,
+        )
+    except ClientError as exc:
+        raise RuntimeError(
+            f"copy_object s3://{src_bucket}/{src_key} -> "
+            f"s3://{dst_bucket}/{dst_key} failed: {exc}"
+        ) from exc
+
+    dst_head = s3.head_object(Bucket=dst_bucket, Key=dst_key)
+    dst_size = dst_head["ContentLength"]
+    if dst_size != src_size:
+        raise RuntimeError(
+            f"post-copy size mismatch: src=s3://{src_bucket}/{src_key} ({src_size}) "
+            f"vs dst=s3://{dst_bucket}/{dst_key} ({dst_size})"
+        )
+
+    log.info(
+        "copied s3://%s/%s -> s3://%s/%s size=%d",
+        src_bucket,
+        src_key,
+        dst_bucket,
+        dst_key,
+        dst_size,
+    )
+    return True

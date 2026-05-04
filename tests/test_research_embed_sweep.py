@@ -39,13 +39,16 @@ def _scenario_fixed_window(chunk_tokens: int, sid: str = "S1") -> Scenario:
     )
 
 
-def _scenario_token_budget(chunk_tokens: int, sid: str = "S7") -> Scenario:
+def _scenario_token_budget(
+    chunk_tokens: int, sid: str = "S7", aggregator: str = "mean"
+) -> Scenario:
+    label_suffix = "" if aggregator == "mean" else f"-{aggregator}"
     return Scenario(
         id=sid,
-        label=f"token-budget-{chunk_tokens}",
+        label=f"token-budget-{chunk_tokens}{label_suffix}",
         chunker_name="token-budget",
         chunk_tokens=chunk_tokens,
-        aggregator_name="mean",
+        aggregator_name=aggregator,
     )
 
 
@@ -233,6 +236,9 @@ def test_run_sweep_writes_enriched_jsonl(tmp_path, monkeypatch) -> None:
     assert a["scenario_id"] == "S0"
     assert a["chunker"] == "truncate"
     assert a["chunk_tokens"] is None
+    # S0 has no aggregator; the field must still be present so eval
+    # can group by it without falling over a KeyError.
+    assert a["aggregator"] == "(none)"
     assert a["n_chunks"] == 1
     # token counts: S0 is one-shot, so n_tokens == n_tokens_per_chunk[0]
     # and equals len(ft) under the fake 1-token-per-char tokenizer.
@@ -295,8 +301,53 @@ def test_run_sweep_propagates_n_chunks_for_chunked_scenario(tmp_path, monkeypatc
     assert emitted["long"]["n_chunks"] == 4
     assert emitted["long"]["chunker"] == "fixed-window"
     assert emitted["long"]["chunk_tokens"] == 512
+    assert emitted["long"]["aggregator"] == "mean"
     assert emitted["long"]["n_tokens"] == 2000
     assert emitted["long"]["n_tokens_per_chunk"] == [512, 512, 512, 464]
+
+
+def test_run_sweep_length_weighted_aggregator_end_to_end(tmp_path, monkeypatch) -> None:
+    """Regression lock: ``length-weighted`` requires per-chunk weights and
+    would raise if the wiring in :meth:`embed.TextBatcher._collapse` ever
+    forgot to forward them. Run a real chunked path on a long doc and
+    assert the output is finite and L2-unit. Uses ``fixed-window``
+    rather than ``token-budget`` because the latter is sentence-aware
+    and won't fire on the character-only fake corpus used here."""
+    _patch_encode(monkeypatch)
+    s = Scenario(
+        id="S_lw",
+        label="fixed-window-512-length-weighted",
+        chunker_name="fixed-window",
+        chunk_tokens=512,
+        aggregator_name="length-weighted",
+    )
+    model, _ = _make_fake_model()
+    long_doc = embed_sweep.build_long_doc_config(s, model)
+    assert long_doc is not None
+    cfg = em.EncoderConfig(batch_size=64, min_char_length=0, long_doc=long_doc)
+
+    records = [_corpus_record(ci_id="long", ft="x" * 2000)]
+    out_path = tmp_path / "out.jsonl.bz2"
+    embed_sweep.run_sweep(
+        scenario=s,
+        corpus_records=records,
+        model=model,
+        encoder_cfg=cfg,
+        embedder_tag="m@rev",
+        local_output=out_path,
+    )
+    with bz2.open(out_path, "rb") as fh:
+        record = orjson.loads(fh.readline())
+    assert record["aggregator"] == "length-weighted"
+    assert record["n_chunks"] > 1, (
+        "scenario must actually fire the chunked path to exercise the "
+        "weight-passing wiring"
+    )
+    emb = np.asarray(record["embedding"], dtype=np.float64)
+    assert np.all(np.isfinite(emb))
+    # Aggregator's contract is L2-unit output; allow rounding to 5
+    # decimals (EMBEDDING_DECIMALS) on the way through orjson.
+    assert np.linalg.norm(emb) == pytest.approx(1.0, abs=5e-4)
 
 
 # ---------------------------------------------------------------------------

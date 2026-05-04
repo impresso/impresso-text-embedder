@@ -16,13 +16,18 @@ def _cfg(
     chunk_sizes: tuple[int, ...] = (512, 1024, 2048, 4096, 8190),
     truncate_baseline: bool = True,
     aggregator: str = "mean",
+    aggregators: tuple[str, ...] | None = None,
 ) -> ScenariosConfig:
-    return ScenariosConfig(
-        truncate_baseline=truncate_baseline,
-        chunkers=chunkers,
-        chunk_sizes=chunk_sizes,
-        aggregator=aggregator,
-    )
+    kwargs: dict = {
+        "truncate_baseline": truncate_baseline,
+        "chunkers": chunkers,
+        "chunk_sizes": chunk_sizes,
+    }
+    if aggregators is not None:
+        kwargs["aggregators"] = aggregators
+    else:
+        kwargs["aggregator"] = aggregator
+    return ScenariosConfig(**kwargs)
 
 
 def test_scenario_dataclass_output_dir_name() -> None:
@@ -130,3 +135,75 @@ def test_registry_rejects_duplicate_ids() -> None:
     )
     with pytest.raises(ValueError):
         ScenarioRegistry([s, s])
+
+
+# ---------------------------------------------------------------------------
+# Multi-aggregator (plural) cartesian
+# ---------------------------------------------------------------------------
+
+
+def test_singleton_aggregator_label_unchanged_for_backcompat() -> None:
+    """Singular aggregator path keeps the legacy ``{chunker}-{size}`` label."""
+    scenarios = build_scenarios(_cfg(
+        chunkers=("token-budget",), chunk_sizes=(1024,), aggregator="mean",
+    ))
+    chunked = [s for s in scenarios if s.chunker_name is not None]
+    assert chunked[0].label == "token-budget-1024"
+    assert chunked[0].aggregator_name == "mean"
+
+
+def test_multi_aggregator_grid_size_and_order() -> None:
+    """Plural aggregators expand cartesian with aggregator innermost."""
+    aggs = ("mean", "max", "first-chunk", "length-weighted")
+    scenarios = build_scenarios(_cfg(
+        chunkers=("token-budget",),
+        chunk_sizes=(256, 1024, 4096),
+        aggregators=aggs,
+    ))
+    # 1 baseline + 1 chunker × 3 sizes × 4 aggregators = 13 scenarios.
+    assert len(scenarios) == 1 + 1 * 3 * 4
+    assert [s.id for s in scenarios] == [f"S{i}" for i in range(13)]
+    chunked = [s for s in scenarios if s.chunker_name is not None]
+    # Size-major, aggregator innermost: contiguous slice of 4 per size.
+    expected_pairs = [
+        (size, agg) for size in (256, 1024, 4096) for agg in aggs
+    ]
+    actual_pairs = [(s.chunk_tokens, s.aggregator_name) for s in chunked]
+    assert actual_pairs == expected_pairs
+
+
+def test_multi_aggregator_label_carries_agg_suffix() -> None:
+    aggs = ("mean", "max")
+    scenarios = build_scenarios(_cfg(
+        chunkers=("token-budget",),
+        chunk_sizes=(1024,),
+        aggregators=aggs,
+    ))
+    chunked = [s for s in scenarios if s.chunker_name is not None]
+    assert {s.label for s in chunked} == {
+        "token-budget-1024-mean",
+        "token-budget-1024-max",
+    }
+
+
+def test_multi_aggregator_unknown_name_rejected() -> None:
+    with pytest.raises(ValueError) as exc:
+        build_scenarios(_cfg(
+            chunkers=("token-budget",),
+            chunk_sizes=(1024,),
+            aggregators=("mean", "not-a-real-aggregator"),
+        ))
+    assert "not-a-real-aggregator" in str(exc.value)
+
+
+def test_multi_aggregator_baseline_still_emits_S0() -> None:
+    scenarios = build_scenarios(_cfg(
+        chunkers=("token-budget",),
+        chunk_sizes=(256,),
+        aggregators=("mean", "max"),
+        truncate_baseline=True,
+    ))
+    assert scenarios[0].id == "S0"
+    assert scenarios[0].chunker_name is None
+    assert scenarios[0].aggregator_name is None
+    assert scenarios[0].label == "truncate-8192"

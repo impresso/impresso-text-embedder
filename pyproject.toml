@@ -116,6 +116,7 @@ impresso-research-embed-sweep = "impresso_text_embedder.research.embed_sweep:mai
 impresso-research-query-generate = "impresso_text_embedder.research.query_generate:main"
 impresso-research-query-generate-local = "impresso_text_embedder.research.query_generate_local:main"
 impresso-research-query-embed = "impresso_text_embedder.research.query_embed:main"
+impresso-research-study-seed = "impresso_text_embedder.research.study_seed:main"
 
 [project.urls]
 Homepage = "https://impresso-project.ch"

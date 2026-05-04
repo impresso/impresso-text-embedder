@@ -500,3 +500,103 @@ def test_repr_markdown_renders_in_jupyter() -> None:
     assert md.lstrip().startswith("###")
     assert cfg.study.name in md
     assert cfg.config_sha in md
+
+
+# ---------------------------------------------------------------------------
+# Multi-aggregator schema (aggregators: list)
+# ---------------------------------------------------------------------------
+
+
+def test_aggregators_list_parses_and_overrides_singular_default(tmp_path: Path) -> None:
+    study_path = _write_base_and_study(
+        tmp_path,
+        study_overlay={
+            "study": {"name": "C-test"},
+            "corpus": {"min_tokens": 4000},
+            "scenarios": {
+                "chunk_sizes": [512, 1024],
+                "aggregators": ["mean", "max", "first-chunk", "length-weighted"],
+            },
+        },
+    )
+    cfg = sc.load_study_config(study_path)
+    assert cfg.scenarios.aggregators == (
+        "mean", "max", "first-chunk", "length-weighted",
+    )
+    assert cfg.scenarios.effective_aggregators() == cfg.scenarios.aggregators
+
+
+def test_singular_aggregator_alone_still_works(tmp_path: Path) -> None:
+    """The legacy form (singular aggregator: <name>) keeps working."""
+    cfg = sc.load_study_config(_write_base_and_study(tmp_path))
+    assert cfg.scenarios.aggregators is None
+    assert cfg.scenarios.effective_aggregators() == ("mean",)
+
+
+def test_aggregator_and_aggregators_mutually_exclusive(tmp_path: Path) -> None:
+    """Setting both forms must error — the schema picks one or the other."""
+    study_path = _write_base_and_study(
+        tmp_path,
+        study_overlay={
+            "study": {"name": "v1"},
+            "corpus": {"min_tokens": 4000},
+            "scenarios": {
+                "chunk_sizes": [512],
+                "aggregator": "max",
+                "aggregators": ["mean", "max"],
+            },
+        },
+    )
+    with pytest.raises(Exception) as exc:
+        sc.load_study_config(study_path)
+    assert "mutually exclusive" in str(exc.value)
+
+
+def test_aggregators_empty_list_rejected(tmp_path: Path) -> None:
+    study_path = _write_base_and_study(
+        tmp_path,
+        study_overlay={
+            "study": {"name": "v1"},
+            "corpus": {"min_tokens": 4000},
+            "scenarios": {"chunk_sizes": [512], "aggregators": []},
+        },
+    )
+    with pytest.raises(Exception) as exc:
+        sc.load_study_config(study_path)
+    assert "non-empty" in str(exc.value)
+
+
+def test_n_scenarios_multiplies_by_aggregators(tmp_path: Path) -> None:
+    study_path = _write_base_and_study(
+        tmp_path,
+        study_overlay={
+            "study": {"name": "C-test"},
+            "corpus": {"min_tokens": 4000},
+            "scenarios": {
+                "chunkers": ["token-budget"],
+                "chunk_sizes": [256, 1024, 4096],
+                "aggregators": ["mean", "max", "first-chunk", "length-weighted"],
+            },
+        },
+    )
+    cfg = sc.load_study_config(study_path)
+    # 1 baseline + 1 chunker × 3 sizes × 4 aggregators = 13
+    assert cfg.n_scenarios() == 13
+
+
+def test_repo_C_aggregator_yaml_loads() -> None:
+    """The shipped C-aggregator study YAML must validate end-to-end."""
+    cfg_path = Path(__file__).parent.parent / "configs/research/C-aggregator.yaml"
+    cfg = sc.load_study_config(cfg_path)
+    assert cfg.study.name == "C-aggregator"
+    assert cfg.scenarios.chunkers == ("token-budget",)
+    assert cfg.scenarios.chunk_sizes == (256, 1024, 4096)
+    assert cfg.scenarios.aggregators == (
+        "mean", "max", "first-chunk", "length-weighted",
+    )
+    # 1 + 1 × 3 × 4 = 13
+    assert cfg.n_scenarios() == 13
+    # Same corpus filters as A-fit (the seed CLI's whole point).
+    assert cfg.corpus.min_tokens == 7000
+    assert cfg.corpus.max_tokens == 8000
+    assert cfg.corpus.providers == {"fr": None, "de": None}

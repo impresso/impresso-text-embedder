@@ -170,16 +170,25 @@ class ScenariosConfig(_Frozen):
 
     The chunker family list and chunk-size grid are the cartesian
     product expanded by the builder; ``truncate_baseline`` adds an
-    extra scenario at id ``S0`` with no chunker. Chunker names are NOT
-    validated against the chunking registry here — that responsibility
-    lives in the builder so this module stays free of imports from
-    ``impresso_text_embedder.chunking``.
+    extra scenario at id ``S0`` with no chunker. Chunker and aggregator
+    names are NOT validated against their respective registries here —
+    that responsibility lives in the builder so this module stays free
+    of imports from ``impresso_text_embedder.chunking`` and
+    ``impresso_text_embedder.aggregation``.
+
+    Aggregation can be either a single value (``aggregator: mean``) or
+    a list (``aggregators: [mean, max, first-chunk, length-weighted]``)
+    that fans the cartesian into a third dimension. Setting both is a
+    schema error — pick one. The singleton path stays bit-identical to
+    the pre-list behaviour so existing studies (A-fit, B-overflow,
+    v1) keep their scenario IDs and ``config_sha`` unchanged.
     """
 
     truncate_baseline: bool = True
     chunkers: tuple[str, ...]
     chunk_sizes: tuple[int, ...]
     aggregator: str = "mean"
+    aggregators: tuple[str, ...] | None = None
 
     @field_validator("chunk_sizes")
     @classmethod
@@ -198,6 +207,32 @@ class ScenariosConfig(_Frozen):
         if not v:
             raise ValueError("scenarios.chunkers must be non-empty")
         return v
+
+    @model_validator(mode="after")
+    def _aggregator_xor_aggregators(self) -> "ScenariosConfig":
+        # ``aggregator`` defaults to "mean", so we can't detect "set" by
+        # presence; the rule is "if aggregators is given, the singular
+        # MUST be left at its default". Studies that want a single
+        # non-default aggregator still use ``aggregator: <name>``.
+        if self.aggregators is not None:
+            if not self.aggregators:
+                raise ValueError("scenarios.aggregators must be non-empty when set")
+            if self.aggregator != "mean":
+                raise ValueError(
+                    "scenarios.aggregator and scenarios.aggregators are mutually "
+                    "exclusive — drop the singular form when listing multiple "
+                    f"aggregators (got aggregator={self.aggregator!r}, "
+                    f"aggregators={list(self.aggregators)})"
+                )
+        return self
+
+    def effective_aggregators(self) -> tuple[str, ...]:
+        """The aggregator list the builder will iterate over.
+
+        ``(self.aggregator,)`` when only the singular form is set;
+        ``self.aggregators`` when the plural form is set.
+        """
+        return self.aggregators if self.aggregators is not None else (self.aggregator,)
 
 
 class QueryGenerationConfig(_Frozen):
@@ -293,9 +328,10 @@ class StudyConfig(_Frozen):
 
     def n_scenarios(self) -> int:
         """Total scenarios that ``scenario_builder`` will expand."""
-        return (1 if self.scenarios.truncate_baseline else 0) + len(
-            self.scenarios.chunkers
-        ) * len(self.scenarios.chunk_sizes)
+        s = self.scenarios
+        return (1 if s.truncate_baseline else 0) + (
+            len(s.chunkers) * len(s.chunk_sizes) * len(s.effective_aggregators())
+        )
 
     def summary(self) -> str:
         """Human-readable multi-line summary of what this study tests.
@@ -330,7 +366,7 @@ class StudyConfig(_Frozen):
             f"  truncate_baseline : {s.truncate_baseline}",
             f"  chunkers          : {', '.join(s.chunkers)}",
             f"  chunk_sizes       : {', '.join(str(x) for x in s.chunk_sizes)}",
-            f"  aggregator        : {s.aggregator}",
+            f"  aggregators       : {', '.join(s.effective_aggregators())}",
             "",
             "Query generation",
             f"  model              : {q.model}  @ {q.endpoint}",
@@ -355,6 +391,7 @@ class StudyConfig(_Frozen):
         cpt = ", ".join(f"**{lg}**={v:.2f}" for lg, v in c.chars_per_token.items())
         chunkers = ", ".join(f"`{x}`" for x in s.chunkers)
         sizes = ", ".join(f"`{x}`" for x in s.chunk_sizes)
+        aggs = ", ".join(f"`{x}`" for x in s.effective_aggregators())
         return (
             f"### Study `{self.study.name}` &nbsp;<sub>config_sha=`{self.config_sha}`</sub>\n\n"
             f"**Corpus** — {', '.join(c.languages)} · {c.year_min}–{c.year_max} · "
@@ -365,9 +402,10 @@ class StudyConfig(_Frozen):
             f"**Embed** — `{e.model_name}@{e.model_revision}` · {e.precision} · "
             f"attn={e.attention} · unpad={e.unpad_inputs} · min_char_length={e.min_char_length}\n\n"
             f"**Scenarios** — {self.n_scenarios()} total · "
-            f"truncate_baseline={s.truncate_baseline} · agg=`{s.aggregator}`\n\n"
+            f"truncate_baseline={s.truncate_baseline}\n\n"
             f"- chunkers: {chunkers}\n"
-            f"- chunk_sizes: {sizes}\n\n"
+            f"- chunk_sizes: {sizes}\n"
+            f"- aggregators: {aggs}\n\n"
             f"**Query generation** — `{q.model}` @ `{q.endpoint}` · "
             f"T={q.temperature} · max_parallel={q.max_parallel} · "
             f"{q.queries_per_bucket}/bucket × ({', '.join(q.position_buckets)})\n\n"

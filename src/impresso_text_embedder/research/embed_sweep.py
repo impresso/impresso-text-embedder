@@ -395,6 +395,7 @@ def _build_output_record(
     enriched["scenario_id"] = scenario.id
     enriched["chunker"] = scenario.chunker_name or "truncate"
     enriched["chunk_tokens"] = scenario.chunk_tokens
+    enriched["aggregator"] = scenario.aggregator_name or "(none)"
     if study_name is not None:
         enriched["study_name"] = study_name
     if study_config_sha is not None:

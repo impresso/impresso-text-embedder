@@ -49,6 +49,7 @@ Romance / Germanic / Luxembourgish, so the optimum may differ.
 | 7 | [query-embed](./query-embed/notes.md) | wip |
 | 8 | [eval-harness](./eval-harness/notes.md) | wip |
 | 9 | [semantic-chunker-fixes](./semantic-chunker-fixes/notes.md) | done |
+| 10 | [aggregation-sweep](./aggregation-sweep/notes.md) | done |
 
 ## Steps
 
@@ -334,6 +335,37 @@ fallback) and follow-ups (re-run S11–S15 against the existing
 study corpus to confirm the shift holds at scale; drop the
 `_tokenizer` reach when chonkie ships a public setter) in
 [`./semantic-chunker-fixes/notes.md`](./semantic-chunker-fixes/notes.md).
+
+### 10 — aggregation-sweep
+
+Realises the deferred "Length-weighted / max / first-chunk ablations" line
+from [Scope](#scope-locked-with-the-user) early on `token-budget` rather
+than waiting for a definitive winner from study-A-fit. New study
+`C-aggregator` at `configs/research/C-aggregator.yaml` pins the chunker
+to `token-budget` and sweeps all four registered aggregators (`mean`,
+`max`, `first-chunk`, `length-weighted`) at three sizes
+`[256, 1024, 4096]` — 13 scenarios total (1 truncate baseline + 1×3×4).
+256 is intentionally a new chunk size not present in A-fit/B-overflow:
+small chunks stress aggregation choice (more vectors to combine, more
+weight asymmetry for length-weighted). Corpus filters identical to
+A-fit so `corpus.jsonl.bz2` / `queries.jsonl.bz2` /
+`queries-embedded.jsonl.bz2` server-side-copy via the new
+`impresso-research-study-seed` CLI (`io.copy_s3_object` →
+`s3.copy_object`, no body transfer, idempotent skip-if-exists).
+Schema change: `ScenariosConfig.aggregators: tuple[str, ...] | None`
+fans the cartesian into a third dimension when set, mutually exclusive
+with the singleton `aggregator: str` form; singleton path stays
+bit-identical so A-fit/B-overflow/v1 keep their scenario IDs and
+`config_sha`. Scenario label grows the `-{agg}` suffix only when
+`len(aggregators) > 1`. Output records gain an `aggregator` field for
+downstream eval slicing (`(none)` for the truncate baseline). Code at
+`src/impresso_text_embedder/research/{study_config,scenario_builder,study_seed}.py`
++ `src/impresso_text_embedder/io.py` (the `copy_s3_object` helper).
+Design narrative, ordering rationale (size-major / agg-innermost so
+"all aggregators at one cell" is a contiguous slice of IDs), and
+rejected alternatives (separate-studies-per-aggregator,
+fully-explicit `scenarios:` list, aggregator-major ordering) in
+[`./aggregation-sweep/notes.md`](./aggregation-sweep/notes.md).
 
 ## Open items
 
