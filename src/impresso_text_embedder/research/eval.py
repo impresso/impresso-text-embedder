@@ -44,6 +44,7 @@ import bz2
 import dataclasses
 import logging
 import math
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,14 @@ log = logging.getLogger(__name__)
 # Default ranks for Recall@k columns. Keeping it tight (1/5/10)
 # matches the IR-eval convention and avoids parquet column bloat.
 DEFAULT_K_VALUES: tuple[int, ...] = (1, 5, 10)
+
+# Matryoshka prefix dimensions for ``gte-multilingual-base``. The model is
+# trained with Matryoshka heads at these targets, so a prefix of length
+# ``d ∈ DEFAULT_TRUNCATION_DIMS`` is itself a meaningful embedding once
+# re-L2-normalised. ``768`` is the full hidden size; smaller values trade
+# storage / cosine cost against retrieval quality. Notebook-level constant —
+# the helper itself is dim-agnostic.
+DEFAULT_TRUNCATION_DIMS: tuple[int, ...] = (64, 128, 256, 512, 768)
 
 
 # ---------------------------------------------------------------------------
@@ -159,28 +168,38 @@ class SanityReport:
 def ensure_local(
     study_cfg: StudyConfig, filename: str, *, force: bool = False
 ) -> Path:
-    """Download ``filename`` from S3 to the study's local mirror, cache, return.
+    """Download ``filename`` from S3, decompress if bz2, cache, return.
 
     Notebooks run cells repeatedly; the production
     :func:`research._io.staged_input` deletes its tempfile on
     context exit, which is exactly the wrong behaviour. Use this
-    instead — the file lives at ``study_cfg.local_path(filename)``
-    and is reused on every call until ``force=True``.
+    instead — the artefact lives under ``study_cfg.local_path(...)``
+    and is reused on every call until ``force=True``. For ``*.bz2``
+    inputs the bz2 is decompressed to a sibling ``.jsonl`` and the
+    compressed copy is removed, so the on-disk cache is grep-able and
+    openable without a decompressor.
     """
-    local = study_cfg.local_path(filename)
+    bz2_path = study_cfg.local_path(filename)
+    decompress = filename.endswith(".bz2")
+    local = bz2_path.with_suffix("") if decompress else bz2_path
     if local.exists() and not force:
         log.debug("cache hit: %s", local)
         return local
     local.parent.mkdir(parents=True, exist_ok=True)
     s3_key = study_cfg.s3_key(filename)
-    log.info("downloading s3://%s/%s -> %s", study_cfg.s3.bucket, s3_key, local)
-    s3io.download_to_local(study_cfg.s3.bucket, s3_key, local)
+    log.info("downloading s3://%s/%s -> %s", study_cfg.s3.bucket, s3_key, bz2_path)
+    s3io.download_to_local(study_cfg.s3.bucket, s3_key, bz2_path)
+    if decompress:
+        log.info("decompressing %s -> %s", bz2_path, local)
+        with bz2.open(bz2_path, "rb") as src, open(local, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        bz2_path.unlink()
     return local
 
 
-def _iter_jsonl_bz2(path: Path) -> list[dict]:
+def _iter_jsonl(path: Path) -> list[dict]:
     out: list[dict] = []
-    with bz2.open(path, "rb") as fh:
+    with open(path, "rb") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -210,7 +229,7 @@ def load_queries(
 ) -> tuple[QueryRow, ...]:
     """Pull and parse ``queries-embedded.jsonl.bz2`` for a study."""
     path = ensure_local(study_cfg, QUERIES_EMBEDDED_FILENAME, force=force)
-    return tuple(_to_query_row(r) for r in _iter_jsonl_bz2(path))
+    return tuple(_to_query_row(r) for r in _iter_jsonl(path))
 
 
 def load_scenario_pool(
@@ -219,7 +238,7 @@ def load_scenario_pool(
     """Pull and parse one scenario's doc-embedding shard."""
     filename = scenario_filename(scenario.id)
     path = ensure_local(study_cfg, filename, force=force)
-    records = _iter_jsonl_bz2(path)
+    records = _iter_jsonl(path)
     if not records:
         raise ValueError(
             f"scenario {scenario.id}: empty embedding shard at {path}"
@@ -297,6 +316,80 @@ def load_eval_inputs(
         queries=queries,
         pools=pools,
         scenarios=tuple(scenarios),
+    )
+
+
+def _l2_renormalize(arr: np.ndarray) -> np.ndarray:
+    """Row-wise L2 renorm; zero rows pass through unchanged.
+
+    ``arr`` may be 1-D (single vector) or 2-D (row-major matrix). Output
+    dtype is preserved. Zero-norm rows survive without a NaN — matches
+    :func:`cosine_scores`'s defensive style so a degenerate truncation
+    prefix doesn't poison the rank pipeline.
+    """
+    norms = np.linalg.norm(arr, axis=-1, keepdims=True)
+    safe = np.where(norms == 0, 1.0, norms)
+    return arr / safe
+
+
+def truncate_inputs(inputs: EvalInputs, dim: int) -> EvalInputs:
+    """Return a copy of ``inputs`` with every embedding sliced to its first
+    ``dim`` components and re-L2-normalised.
+
+    Used for Matryoshka-style dim-truncation analysis:
+    ``Alibaba-NLP/gte-multilingual-base`` is trained with Matryoshka heads
+    at :data:`DEFAULT_TRUNCATION_DIMS`, so a prefix of the 768-d output is
+    itself a meaningful unit-norm embedding once renormalised.
+
+    Behaviour:
+
+    - ``dim == full embedding dim`` returns a copy with arrays renormed
+      anyway. The renorm is a no-op up to fp32 round-off, and the copy
+      lets callers loop over a dim sweep without a special case.
+    - ``dim > full dim`` raises :class:`ValueError`. Zero-padding would
+      inject a degenerate subspace and silently inflate cosine
+      distances, so we refuse rather than guess.
+    - ``dim <= 0`` raises :class:`ValueError`.
+    - Rows whose first ``dim`` components are all zero (rare; only
+      possible for degenerate fixtures) are left at zero — the existing
+      :func:`cosine_scores` is defensive against zero vectors and
+      :func:`rank_of_gold` will then place them at the bottom of the
+      tied-pessimistic rank.
+
+    The returned :class:`EvalInputs` reuses ``study`` and ``scenarios``;
+    only ``queries`` and ``pools`` are rebuilt with truncated arrays.
+    """
+    if dim <= 0:
+        raise ValueError(f"truncate_inputs: dim must be > 0, got {dim}")
+
+    embedding_dims = {q.embedding.shape[0] for q in inputs.queries}
+    embedding_dims.update(p.embeddings.shape[1] for p in inputs.pools.values())
+    if not embedding_dims:
+        return inputs
+    full_dim = max(embedding_dims)
+    if dim > full_dim:
+        raise ValueError(
+            f"truncate_inputs: dim={dim} exceeds full embedding dim {full_dim}; "
+            "zero-padding is refused (would inflate cosine distances)"
+        )
+
+    new_queries = tuple(
+        dataclasses.replace(
+            q,
+            embedding=_l2_renormalize(q.embedding[:dim].astype(np.float32, copy=True)),
+        )
+        for q in inputs.queries
+    )
+    new_pools: dict[str, ScenarioPool] = {}
+    for sid, pool in inputs.pools.items():
+        new_pools[sid] = dataclasses.replace(
+            pool,
+            embeddings=_l2_renormalize(
+                pool.embeddings[:, :dim].astype(np.float32, copy=True)
+            ),
+        )
+    return dataclasses.replace(
+        inputs, queries=new_queries, pools=new_pools
     )
 
 
@@ -435,6 +528,31 @@ def rank_of_gold(scores: np.ndarray, gold_idx: int) -> int:
     gold_score = scores[gold_idx]
     higher_or_equal = int(np.sum(scores >= gold_score)) - 1  # exclude self
     return higher_or_equal + 1
+
+def margin_of_gold(scores: np.ndarray, gold_idx: int) -> float:
+    """Return the margin between the gold score and the max non-gold score.
+
+    Positive means the gold is ahead of all competitors; negative means
+    it's behind at least one. This is a more fine-grained metric than rank
+    that still captures the "win/lose" aspect of retrieval.
+    """
+    if scores.size <= 1:
+        return float("nan")  # no competitors, margin undefined
+    gold_score = float(scores[gold_idx])
+    mask = np.ones(scores.shape[0], dtype=bool)
+    mask[gold_idx] = False
+    max_competitor = float(np.max(scores[mask]))
+    return gold_score - max_competitor
+
+def softmax_nll(scores: np.ndarray, gold_idx: int, temperature: float = 0.05) -> float:
+    """Return the negative log-likelihood of the gold under a softmax over scores."""
+    if scores.size == 0:
+        return float("nan")  # no competitors, NLL undefined
+    # Apply temperature to the scores
+    logits = scores.astype(np.float64) / temperature
+    m = float(logits.max())
+    log_z = m + math.log(float(np.exp(logits - m).sum()))
+    return log_z - float(logits[gold_idx]) 
 
 
 def recall_at_k(ranks: Sequence[int] | np.ndarray, k: int) -> float:
@@ -690,6 +808,8 @@ def score_queries(
                 rank = rank_of_gold(scores, gold_idx)
                 row["rank"] = rank
                 row["reciprocal_rank"] = 1.0 / rank
+                row["margin"] = margin_of_gold(scores, gold_idx)
+                row["nll"]    = softmax_nll(scores, gold_idx)
                 for k in k_values:
                     row[f"recall_at_{k}"] = bool(rank <= k)
             rows.append(row)
@@ -699,6 +819,8 @@ def score_queries(
         df["chunk_tokens"] = df["chunk_tokens"].astype("Int64")
         df["rank"] = df["rank"].astype("Float64")
         df["reciprocal_rank"] = df["reciprocal_rank"].astype("Float64")
+        df["margin"] = df["margin"].astype("Float64")
+        df["nll"]    = df["nll"].astype("Float64")
         df["n_chunks"] = df["n_chunks"].astype("Int64")
         df["n_tokens"] = df["n_tokens"].astype("Int64")
         df["len_chars"] = df["len_chars"].astype("Int64")
@@ -844,6 +966,7 @@ def truncation_loss_table(
 __all__ = [
     "DEFAULT_K_VALUES",
     "DEFAULT_TOKEN_BUCKET_EDGES",
+    "DEFAULT_TRUNCATION_DIMS",
     "EvalInputs",
     "QueryRow",
     "SanityReport",
@@ -865,5 +988,6 @@ __all__ = [
     "score_queries",
     "token_bucket",
     "token_buckets",
+    "truncate_inputs",
     "truncation_loss_table",
 ]

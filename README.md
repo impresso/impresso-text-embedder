@@ -82,26 +82,68 @@ them apart beyond the `gen_endpoint` field on each record.
 | Backend                             | Where the LLM runs                                                                | Auth needed                            | Wallclock (study-v1, ~2400 generations) | When to pick                                                                                          |
 | ----------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | **AIaaS** (default)                 | EPFL RCP AIaaS endpoint (`https://inference.rcp.epfl.ch/v1`, OpenAI-compatible)   | `RCP_API_KEY` in `.env`                | ~60–100 min at the 2-parallel cap       | Laptop / login-node runs; you don't need a GPU; AIaaS is up and not throttled.                        |
-| **CaaS** (`*-local` Make targets)   | Local `transformers.AutoModelForCausalLM` (bf16 + SDPA Flash-Attn-2) inside the production Run:AI image | none (model weights cached in `HF_HOME`) | ~80 min on a single H100, single inflight | RCP / Run:AI run that needs to be self-contained; AIaaS throttled or unavailable; reproducibility-locked study runs. |
+| **CaaS** (`*-local` Make targets)   | Local `transformers.AutoModelForCausalLM` (bf16 + SDPA Flash-Attn-2) inside the production Run:AI image | none (model weights cached in `HF_HOME`) | ~1–2 h on a single H100 80GB at `batch_size=4` (study-A-fit) | RCP / Run:AI run that needs to be self-contained; AIaaS throttled or unavailable; reproducibility-locked study runs. |
 
 ```bash
 # AIaaS — laptop / login node
 make STUDY=study-A-fit research-query-generate
 
-# CaaS — Run:AI (one job per study, one GPU)
+# CaaS — Run:AI (one H100 80GB job per study, batch_size=8 by default)
 make STUDY=study-A-fit runai-submit-query-generate-local
-# CaaS — laptop / GPU host smoke test
+
+# CaaS — laptop / GPU host smoke test (single-stream, batch_size=1)
 make STUDY=study-A-fit research-query-generate-local \
      QUERY_GEN_LOCAL_ARGS="--no-upload --limit 1"
 ```
 
 Both targets honour `STUDY=...` for the study YAML, and forward
 extras via `QUERY_GEN_ARGS=` (AIaaS) and `QUERY_GEN_LOCAL_ARGS=`
-(CaaS). The CaaS path defaults to the same model the AIaaS path
-uses (`Qwen/Qwen3-30B-A3B-Instruct-2507`); override with
-`--model`, attention with `--attention {sdpa,flash_attention_2,eager}`,
-weights dtype with `--dtype {bf16,fp16,fp32}`. Design rationale and
-rejected alternatives in
+(CaaS). The CaaS path uses the same model as the AIaaS path
+(`Qwen/Qwen3-30B-A3B-Instruct-2507`); override with `--model`,
+attention with `--attention {sdpa,flash_attention_2,eager}`, dtype
+with `--dtype {bf16,fp16,fp32}`.
+
+**CaaS hardware defaults.** `runai-submit-query-generate-local`
+defaults to the **`h100` node pool** (target-specific override of
+the `default` (a100) pool used by every other submit target).
+Qwen3-30B-A3B in bf16 is ~61 GB of weights, so A100 40GB OOMs on
+the weights alone; the `h100` pool on RCP carries H100 80GB + H200
+141GB (per `make help`), both fit. The job does **not** pin a
+specific GPU product — RCP's `restrict-nodename-runai-workloads`
+policy rejects `--node-type` and requires `--node-pools` instead,
+so node-pool routing is the right granularity.
+
+The submit also exports
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` so the caching
+allocator releases fragmented blocks back to the pool between
+batches — strongly recommended for any long-running local-LLM job
+with variable-length inputs.
+
+`QGL_BATCH_SIZE` is the `--batch-size` knob threaded into the CLI.
+Defaults are calibrated against measured H100 80GB peak memory:
+
+| Study | Doc tokens | `QGL_BATCH_SIZE` | Wallclock estimate |
+| --- | --- | --- | --- |
+| `study-v1` / `study-A-fit` | ≤ 8 192 | **4** (default) | ~1–2 h on study-A-fit (3600 jobs) |
+| `study-B-overflow` | ≥ 16 384 | **2** (override) | ~3–5 h |
+
+At study-A-fit (8k-token docs, ~13k-token full prompts including
+output budget), batch=8 OOMs at 78 GB. Batch=4 peaks ~70 GB with
+~10 GB headroom. Bump UP only with VRAM telemetry; the OOM-aware
+fallback inside the run loop will retry an OOMed batch as size-1
+calls so a single bad batch doesn't lose its prompts, but
+sustained OOMs eat wallclock and you should lower the default.
+
+Override at submit time when H100 capacity is tight:
+
+```bash
+make STUDY=study-A-fit runai-submit-query-generate-local \
+     RUNAI_NODE_POOL=default \
+     QGL_BATCH_SIZE=2
+```
+
+(Only safe on the A100 80GB nodes within `default`; A100 40GB
+OOMs.) Design rationale and rejected alternatives in
 [`.progress/query-generation/notes.md`](./.progress/query-generation/notes.md).
 
 Each scenario writes to a per-study, per-scenario S3 prefix:

@@ -24,15 +24,15 @@ corpus:
   input_path: "tmp/115-canonical-processed-final-langident-langident-lid-ensemble_multilingual_v2-0-2__AGGREGATED.jsonl"
   languages: [fr, de]
   ocrqa_min: 0.9
-  year_min: 1950
+  year_min: 1880
   year_max: 1980
   providers:
     fr: [BNF, LeTemps, SNL, FedGaz]
     de: [SNL, FedGaz, BNL]
   chars_per_token:
-    fr: 3.688
-    de: 4.281
-  n_per_lg: 300
+    fr: 3.933
+    de: 4.301
+  n_per_lg: 200
   seed: 42
   # min_tokens, max_tokens — set per study
 

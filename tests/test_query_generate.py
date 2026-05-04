@@ -149,6 +149,13 @@ class TestUserMessage:
         assert "FULL ARTICLE" in msg
         assert "aaa bbb ccc" in msg
 
+    def test_drops_full_article_when_doc_exceeds_char_limit(self):
+        ft = "x" * (qg._INCLUDE_FULL_ARTICLE_CHAR_LIMIT + 1)
+        record = qg.CorpusRecord(ci_id="x", lg="fr", ft=ft)
+        msg = qg.build_user_message(record, "head", "x" * 100)
+        assert "FOCUS REGION (head" in msg
+        assert "FULL ARTICLE" not in msg
+
 
 # ---------------------------------------------------------------------------
 # Job planning

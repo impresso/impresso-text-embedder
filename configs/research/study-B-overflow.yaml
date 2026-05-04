@@ -26,8 +26,25 @@ study:
   name: "B-overflow"
 
 corpus:
+  ocrqa_min: 0.88
+  year_min: 1930
+  year_max: 1980
   min_tokens: 16384
+  max_tokens: 60000
+  n_per_lg: 300
+  providers:
+    fr: 
+    de: 
 
 scenarios:
   # 5 sizes × 3 chunkers + 1 truncate baseline = 16 scenarios.
   chunk_sizes: [512, 1024, 2048, 4096, 8190]
+
+query_generation:
+  # 16–60k-token docs make MoE prefill on the EPFL endpoint slower than
+  # the 120 s default. build_user_message also drops the FULL ARTICLE
+  # block for >32 k-char docs, so prompts here collapse to roughly the
+  # focus region (~5–20k tokens), but headroom against prefill jitter
+  # is still useful — first round of retries was hitting the 120 s
+  # ceiling cleanly.
+  request_timeout_s: 600.0

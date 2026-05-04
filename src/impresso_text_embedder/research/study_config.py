@@ -291,6 +291,90 @@ class StudyConfig(_Frozen):
         payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
+    def n_scenarios(self) -> int:
+        """Total scenarios that ``scenario_builder`` will expand."""
+        return (1 if self.scenarios.truncate_baseline else 0) + len(
+            self.scenarios.chunkers
+        ) * len(self.scenarios.chunk_sizes)
+
+    def summary(self) -> str:
+        """Human-readable multi-line summary of what this study tests.
+
+        Use directly (``print(cfg.summary())``) or rely on the Jupyter
+        Markdown variant via ``_repr_markdown_``.
+        """
+        c, e, s, q = self.corpus, self.embed, self.scenarios, self.query_generation
+        max_tokens = f"-{c.max_tokens}" if c.max_tokens is not None else "+"
+        providers = ", ".join(
+            f"{lg}={'/'.join(p) if p else 'all'}" for lg, p in c.providers.items()
+        )
+        cpt = ", ".join(f"{lg}={v:.2f}" for lg, v in c.chars_per_token.items())
+        lines = [
+            f"Study: {self.study.name}  (config_sha={self.config_sha})",
+            "",
+            "Corpus",
+            f"  languages         : {', '.join(c.languages)}",
+            f"  providers         : {providers}",
+            f"  years             : {c.year_min}-{c.year_max}",
+            f"  ocrqa_min         : {c.ocrqa_min}",
+            f"  doc tokens        : {c.min_tokens}{max_tokens}",
+            f"  docs per language : {c.n_per_lg}  (seed={c.seed})",
+            f"  chars/token       : {cpt}",
+            "",
+            "Embed",
+            f"  model     : {e.model_name}@{e.model_revision}",
+            f"  precision : {e.precision}   attention: {e.attention}   unpad: {e.unpad_inputs}",
+            f"  min_char_length : {e.min_char_length}",
+            "",
+            f"Scenarios ({self.n_scenarios()} total)",
+            f"  truncate_baseline : {s.truncate_baseline}",
+            f"  chunkers          : {', '.join(s.chunkers)}",
+            f"  chunk_sizes       : {', '.join(str(x) for x in s.chunk_sizes)}",
+            f"  aggregator        : {s.aggregator}",
+            "",
+            "Query generation",
+            f"  model              : {q.model}  @ {q.endpoint}",
+            f"  temperature        : {q.temperature}   max_output_tokens: {q.max_output_tokens}",
+            f"  max_parallel       : {q.max_parallel}",
+            f"  position_buckets   : {', '.join(q.position_buckets)}",
+            f"  queries_per_bucket : {q.queries_per_bucket}",
+            "",
+            "Paths",
+            f"  local : {self.study_local_root()}",
+            f"  s3    : s3://{self.s3.bucket}/{self.study_s3_root()}",
+        ]
+        return "\n".join(lines)
+
+    def _repr_markdown_(self) -> str:
+        c, e, s, q = self.corpus, self.embed, self.scenarios, self.query_generation
+        max_tokens = f"–{c.max_tokens}" if c.max_tokens is not None else "+"
+        providers = ", ".join(
+            f"**{lg}**: {'/'.join(p) if p else '_all_'}"
+            for lg, p in c.providers.items()
+        )
+        cpt = ", ".join(f"**{lg}**={v:.2f}" for lg, v in c.chars_per_token.items())
+        chunkers = ", ".join(f"`{x}`" for x in s.chunkers)
+        sizes = ", ".join(f"`{x}`" for x in s.chunk_sizes)
+        return (
+            f"### Study `{self.study.name}` &nbsp;<sub>config_sha=`{self.config_sha}`</sub>\n\n"
+            f"**Corpus** — {', '.join(c.languages)} · {c.year_min}–{c.year_max} · "
+            f"ocrqa ≥ {c.ocrqa_min} · doc tokens {c.min_tokens}{max_tokens} · "
+            f"{c.n_per_lg}/lg (seed {c.seed})\n\n"
+            f"- providers: {providers}\n"
+            f"- chars/token: {cpt}\n\n"
+            f"**Embed** — `{e.model_name}@{e.model_revision}` · {e.precision} · "
+            f"attn={e.attention} · unpad={e.unpad_inputs} · min_char_length={e.min_char_length}\n\n"
+            f"**Scenarios** — {self.n_scenarios()} total · "
+            f"truncate_baseline={s.truncate_baseline} · agg=`{s.aggregator}`\n\n"
+            f"- chunkers: {chunkers}\n"
+            f"- chunk_sizes: {sizes}\n\n"
+            f"**Query generation** — `{q.model}` @ `{q.endpoint}` · "
+            f"T={q.temperature} · max_parallel={q.max_parallel} · "
+            f"{q.queries_per_bucket}/bucket × ({', '.join(q.position_buckets)})\n\n"
+            f"**Paths** — local: `{self.study_local_root()}` · "
+            f"s3: `s3://{self.s3.bucket}/{self.study_s3_root()}`\n"
+        )
+
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge ``overlay`` onto ``base``.

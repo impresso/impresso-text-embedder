@@ -103,7 +103,12 @@ RUNAI_NODE_POOL  ?= default
 # Find labels with: kubectl get nodes -L nvidia.com/gpu.product
 # Examples: NVIDIA-H100-80GB-HBM3, NVIDIA-H200-141GB.
 RUNAI_GPU_TYPE   ?=
-RUNAI_GPU_TYPE_ARG := $(if $(RUNAI_GPU_TYPE),--node-type $(RUNAI_GPU_TYPE),)
+# Deferred (`=` not `:=`) so target-specific assignments to
+# RUNAI_GPU_TYPE — e.g. the H100 default on
+# `runai-submit-query-generate-local` — propagate through, and so a
+# command-line override (`make ... RUNAI_GPU_TYPE=NVIDIA-A100-80GB`)
+# is read at recipe-expansion time, not parse time.
+RUNAI_GPU_TYPE_ARG = $(if $(RUNAI_GPU_TYPE),--node-type $(RUNAI_GPU_TYPE),)
 
 RUNAI_CPU            ?=
 RUNAI_CPU_LIMIT      ?=
@@ -137,8 +142,31 @@ QUERY_GEN_ARGS ?=
 
 # Forwarded to the CaaS query-generate CLI
 # (impresso-research-query-generate-local). Use for --attention,
-# --dtype, --max-retries, --no-upload, --limit.
+# --dtype, --max-retries, --no-upload, --limit. Note: --batch-size is
+# set separately via QGL_BATCH_SIZE so the H100 default doesn't get
+# clobbered when a user appends extra flags here.
 QUERY_GEN_LOCAL_ARGS ?=
+
+# CaaS query-generate batch size. Default 4 sized for H100 80GB +
+# Qwen3-30B-A3B in bf16 against study-A-fit (4-8k-token docs).
+#
+# Memory budget (measured, not estimated — batch=8 OOMed at 78 GB on
+# the first long-prompt batch with study-A-fit, even with
+# expandable_segments):
+#   weights      ≈ 61 GB (30.5B params × 2 bytes)
+#   KV cache     ≈ 1.3 GB / sequence at 13k context (prompt + 1500
+#                output tokens; 48 layers × 4 KV heads × 128 dim × 2 × 2 B)
+#   activations  ≈ 2-4 GB transient during prefill of long prompts
+#                (SDPA chunks the attention-score matrix but
+#                intermediate buffers still scale with B × seq²)
+#   fragmentation ≈ 1-3 GB (PyTorch caching allocator)
+# At B=4 → ~70 GB peak with ~10 GB headroom. At B=8 → OOM.
+#
+# study-B-overflow (≥16k-token docs) needs B=2; bump down with
+# `make QGL_BATCH_SIZE=2 runai-submit-query-generate-local STUDY=B-overflow`.
+# Bump UP only with VRAM telemetry confirming headroom; OOM is the
+# observable failure mode.
+QGL_BATCH_SIZE ?= 4
 
 # Per-job name for the query-embed runai job. One job per study; no
 # scenario fan-out (queries are short plain strings, no chunking).
@@ -225,7 +253,26 @@ runai-submit-query-embed:
 # the only difference is *where the model lives*. Useful when AIaaS
 # is throttled / unavailable, or when a study needs a fully
 # self-contained run with no shared-infra coupling.
-# Usage: make runai-submit-query-generate-local [STUDY=study-A-fit] [QUERY_GEN_LOCAL_ARGS="--limit 64"]
+#
+# Defaults to the **`h100` node pool** — Qwen3-30B-A3B in bf16
+# needs ~60 GB of VRAM for weights, leaving room for batch_size=8
+# KV cache on H100 80GB. A100 40GB OOMs on the weights alone, so
+# the default pool ("default" = a100, mixed 40GB/80GB on RCP) is
+# unsafe.
+#
+# We do NOT pin a specific GPU product (`--node-type
+# NVIDIA-H100-80GB-HBM3`) — the RCP cluster policy
+# `restrict-nodename-runai-workloads` rejects --node-type and
+# requires --node-pools instead. The `h100` pool on RCP carries
+# H100 80GB + H200 (141GB) per the `runai` help comment; either
+# fits batch=8 comfortably, so node-pool routing alone is the
+# right granularity.
+#
+# Override on the command line if H100 capacity is tight
+# (`RUNAI_NODE_POOL=default QGL_BATCH_SIZE=4` — only safe on the
+# A100 80GB nodes within "default", not 40GB).
+# Usage: make runai-submit-query-generate-local [STUDY=study-A-fit] [QGL_BATCH_SIZE=8] [QUERY_GEN_LOCAL_ARGS="--limit 64"]
+runai-submit-query-generate-local: RUNAI_NODE_POOL := h100
 runai-submit-query-generate-local:
 	runai submit \
 	  --name $(RUNAI_QUERY_GENERATE_JOB_NAME) \
@@ -237,11 +284,13 @@ runai-submit-query-generate-local:
 	  --environment SE_SECRET_KEY=SECRET:$(K8S_SECRET_NAME),SE_SECRET_KEY \
 	  --environment SE_HOST_URL=SECRET:$(K8S_SECRET_NAME),SE_HOST_URL \
 	  --environment HF_HOME=$(HF_HOME_PVC) \
+	  --environment PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 	  --node-pools $(RUNAI_NODE_POOL) \
 	  $(RUNAI_GPU_TYPE_ARG) \
 	  $(RUNAI_RESOURCE_ARGS) \
 	  --command -- impresso-research-query-generate-local \
 	     --config $(STUDY_CONFIG) \
+	     --batch-size $(QGL_BATCH_SIZE) \
 	     $(QUERY_GEN_LOCAL_ARGS)
 
 # Interactive debug pod. Same image as the sweep jobs.
@@ -366,6 +415,9 @@ help:
 	@echo "    RUNAI_NODE_POOL  default (a100) | h100 | v100. H200 lives in the h100 pool."
 	@echo "    RUNAI_GPU_TYPE   pin a GPU product within the pool (NVIDIA-H100-80GB-HBM3, …)"
 	@echo "                     Find labels: kubectl get nodes -L nvidia.com/gpu.product"
+	@echo "                     NOTE: rejected on RCP by 'restrict-nodename-runai-workloads'"
+	@echo "                           policy — use --node-pools instead. Knob kept for"
+	@echo "                           clusters that allow nodeType-based selection."
 	@echo "  Resource requests:"
 	@echo "    RUNAI_CPU / RUNAI_CPU_LIMIT / RUNAI_MEMORY / RUNAI_MEMORY_LIMIT"
 	@echo

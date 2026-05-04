@@ -1,14 +1,14 @@
 """Tests for :mod:`impresso_text_embedder.research.eval`.
 
-Loaders are exercised via a tmp-path round-trip (write
-``.jsonl.bz2`` shards on disk, point a study config at them via
-monkeypatched ``ensure_local``); metrics are exercised on small
-deterministic numpy fixtures with known answers.
+Loaders are exercised via a tmp-path round-trip (write plain
+``.jsonl`` shards on disk — matching the post-decompress cache
+layout — and point a study config at them via monkeypatched
+``ensure_local``); metrics are exercised on small deterministic
+numpy fixtures with known answers.
 """
 
 from __future__ import annotations
 
-import bz2
 from pathlib import Path
 
 import numpy as np
@@ -36,9 +36,16 @@ def _unit(vec: list[float]) -> list[float]:
     return (arr / n).tolist() if n > 0 else arr.tolist()
 
 
-def _write_jsonl_bz2(path: Path, records: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with bz2.open(path, "wb") as fh:
+def _decompressed_path(path: Path) -> Path:
+    """Mirror ``ensure_local``'s on-disk layout: strip ``.bz2`` if present."""
+    return path.with_suffix("") if path.suffix == ".bz2" else path
+
+
+def _write_jsonl(path: Path, records: list[dict]) -> None:
+    """Write plain ``.jsonl`` to the post-decompress cache path."""
+    target = _decompressed_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "wb") as fh:
         for r in records:
             fh.write(orjson.dumps(r, option=orjson.OPT_APPEND_NEWLINE))
 
@@ -212,7 +219,7 @@ def _seed_pool(study_cfg: StudyConfig, scenario: Scenario, *, dim: int = 4) -> d
             "study_config_sha": study_cfg.config_sha,
         },
     ]
-    _write_jsonl_bz2(study_cfg.local_path(scenario_filename(scenario.id)), records)
+    _write_jsonl(study_cfg.local_path(scenario_filename(scenario.id)), records)
     return records
 
 
@@ -285,7 +292,7 @@ def _seed_queries(study_cfg: StudyConfig, *, dim: int = 4) -> list[dict]:
             "study_config_sha": study_cfg.config_sha,
         },
     ]
-    _write_jsonl_bz2(study_cfg.local_path(QUERIES_EMBEDDED_FILENAME), records)
+    _write_jsonl(study_cfg.local_path(QUERIES_EMBEDDED_FILENAME), records)
     return records
 
 
@@ -302,9 +309,9 @@ def seeded_study(tmp_path, monkeypatch):
         _seed_pool(cfg, scen)
     _seed_queries(cfg)
 
-    # Bypass S3: ensure_local just returns the local mirror path.
+    # Bypass S3: ensure_local returns the post-decompress local mirror path.
     def _fake_ensure_local(study_cfg, filename, *, force=False):
-        return study_cfg.local_path(filename)
+        return _decompressed_path(study_cfg.local_path(filename))
 
     monkeypatch.setattr(ev, "ensure_local", _fake_ensure_local)
     return cfg, scenarios
@@ -610,11 +617,15 @@ def test_load_pool_falls_back_when_token_fields_missing(tmp_path, monkeypatch):
             "size": 2,
         },
     ]
-    _write_jsonl_bz2(
+    _write_jsonl(
         cfg.local_path(scenario_filename(scenario.id)), legacy_records
     )
     monkeypatch.setattr(
-        ev, "ensure_local", lambda study_cfg, filename, *, force=False: study_cfg.local_path(filename)
+        ev,
+        "ensure_local",
+        lambda study_cfg, filename, *, force=False: _decompressed_path(
+            study_cfg.local_path(filename)
+        ),
     )
     pool = ev.load_scenario_pool(cfg, scenario)
     # Missing fields → 0 total + a single-bucket tuple of (0,), so consumers
@@ -665,3 +676,74 @@ def test_truncation_loss_table_empty_when_baseline_absent(seeded_study):
     df_no_baseline = df[df["scenario_id"] != "S0"]
     table = ev.truncation_loss_table(df_no_baseline, baseline_id="S0")
     assert table.empty
+
+
+# ---------------------------------------------------------------------------
+# truncate_inputs (Matryoshka dim-truncation)
+# ---------------------------------------------------------------------------
+
+
+def test_truncate_inputs_full_dim_idempotent_for_ranking(seeded_study):
+    cfg, scenarios = seeded_study
+    inputs = ev.load_eval_inputs(cfg, scenarios=scenarios)
+    full_dim = inputs.queries[0].embedding.shape[0]
+    truncated = ev.truncate_inputs(inputs, full_dim)
+
+    scores_full = ev.score_queries(inputs)
+    scores_trunc = ev.score_queries(truncated)
+    merged = scores_full.merge(
+        scores_trunc, on=["query_id", "scenario_id"], suffixes=("_full", "_trunc")
+    )
+    # Ranks survive the renorm at full dim (it's a no-op up to fp32 noise,
+    # not enough to flip a competition-rank tie on the 4-d eye fixture).
+    full_ranks = merged["rank_full"].astype("Float64").fillna(-1)
+    trunc_ranks = merged["rank_trunc"].astype("Float64").fillna(-1)
+    assert (full_ranks == trunc_ranks).all()
+
+
+def test_truncate_inputs_renormalises_to_unit(seeded_study):
+    cfg, scenarios = seeded_study
+    inputs = ev.load_eval_inputs(cfg, scenarios=scenarios)
+    # The fixture uses axis-aligned basis vectors, so a dim=2 prefix yields
+    # unit-norm rows for ci_ids whose basis index < 2 and zero rows for the
+    # rest. The contract is "non-zero rows are unit, zero rows pass through".
+    truncated = ev.truncate_inputs(inputs, 2)
+    for q in truncated.queries:
+        norm = float(np.linalg.norm(q.embedding))
+        assert norm == pytest.approx(1.0, abs=1e-5) or norm == 0.0
+    for pool in truncated.pools.values():
+        norms = np.linalg.norm(pool.embeddings, axis=1)
+        for n in norms:
+            assert float(n) == pytest.approx(1.0, abs=1e-5) or float(n) == 0.0
+
+
+def test_truncate_inputs_rejects_bad_dim(seeded_study):
+    cfg, scenarios = seeded_study
+    inputs = ev.load_eval_inputs(cfg, scenarios=scenarios)
+    full_dim = inputs.queries[0].embedding.shape[0]
+    with pytest.raises(ValueError):
+        ev.truncate_inputs(inputs, full_dim + 1)
+    with pytest.raises(ValueError):
+        ev.truncate_inputs(inputs, 0)
+    with pytest.raises(ValueError):
+        ev.truncate_inputs(inputs, -1)
+
+
+def test_truncate_inputs_preserves_metadata(seeded_study):
+    """ci_ids, langs, n_chunks, n_tokens, len_chars survive intact — only
+    embeddings change. Catches accidental row reorder on the rebuild path.
+    """
+    cfg, scenarios = seeded_study
+    inputs = ev.load_eval_inputs(cfg, scenarios=scenarios)
+    truncated = ev.truncate_inputs(inputs, 2)
+    assert truncated.scenarios == inputs.scenarios
+    assert truncated.study is inputs.study
+    for sid, pool in inputs.pools.items():
+        new_pool = truncated.pools[sid]
+        assert (new_pool.ci_ids == pool.ci_ids).all()
+        assert (new_pool.langs == pool.langs).all()
+        assert (new_pool.n_chunks == pool.n_chunks).all()
+        assert (new_pool.n_tokens == pool.n_tokens).all()
+        assert (new_pool.len_chars == pool.len_chars).all()
+        assert new_pool.n_tokens_per_chunk == pool.n_tokens_per_chunk
+        assert new_pool.embeddings.shape == (pool.embeddings.shape[0], 2)

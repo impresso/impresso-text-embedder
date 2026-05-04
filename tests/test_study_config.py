@@ -467,3 +467,36 @@ def test_repo_base_yaml_alone_fails_validation() -> None:
 def test_dedent_helper_is_importable() -> None:
     """Sanity import — fail-loud if textwrap.dedent disappears upstream."""
     assert dedent("  x") == "x"
+
+
+def test_summary_lists_key_study_facets() -> None:
+    """``summary()`` is a notebook ergonomics aid; smoke-check the headline
+    facets land in the rendered text so a YAML rename doesn't silently
+    drop them from notebooks."""
+    cfg_path = Path(__file__).parent.parent / "configs/research/study-v1.yaml"
+    cfg = sc.load_study_config(cfg_path)
+    text = cfg.summary()
+    assert cfg.study.name in text
+    assert cfg.config_sha in text
+    assert cfg.embed.model_name in text
+    assert cfg.embed.model_revision in text
+    for lg in cfg.corpus.languages:
+        assert lg in text
+    for chunker in cfg.scenarios.chunkers:
+        assert chunker in text
+    assert str(cfg.scenarios.chunk_sizes[0]) in text
+    assert cfg.n_scenarios() == (
+        (1 if cfg.scenarios.truncate_baseline else 0)
+        + len(cfg.scenarios.chunkers) * len(cfg.scenarios.chunk_sizes)
+    )
+
+
+def test_repr_markdown_renders_in_jupyter() -> None:
+    """``inputs.study`` in a Jupyter cell uses ``_repr_markdown_`` —
+    smoke-check it returns markdown that mentions the study name."""
+    cfg_path = Path(__file__).parent.parent / "configs/research/study-v1.yaml"
+    cfg = sc.load_study_config(cfg_path)
+    md = cfg._repr_markdown_()
+    assert md.lstrip().startswith("###")
+    assert cfg.study.name in md
+    assert cfg.config_sha in md

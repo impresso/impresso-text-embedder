@@ -372,13 +372,87 @@ Enforcer) — a Qwen3 instruction-tuned model emits well-formed JSON
 reliably enough that the retry-on-parse-fail loop is sufficient at
 v1.
 
-**Concurrency**: synchronous, single inflight generation. The AIaaS
-path runs `asyncio.gather` under a semaphore because the bottleneck
-is per-key TCP parallelism; here the GPU is the bottleneck so a
-single inflight request is the right shape. Batched generation
-(left-padded prompts → one `model.generate` call across `B` jobs)
-is a simple follow-up if wallclock matters, but variable-length
-outputs make the gain modest at small B; left as a follow-up.
+**Throughput lever — batched generation.** A single
+`model.generate(...)` call can process `B` chat prompts in
+parallel via `tokenizer.padding_side="left"` and
+`tokenizer(prompts, padding=True)`; left-padding is what makes
+RoPE + KV-cache work correctly across sequences of different
+lengths. Variable-length output is fine — `model.generate`
+short-circuits sequences that emit EOS while continuing the
+others, so wallclock is set by the slowest in the batch but
+throughput still scales close to `B` on H100.
+
+**Default batch_size = 4** on the Run:AI submit target
+(`runai-submit-query-generate-local`); `batch_size=1` everywhere
+else (laptop-safe). The "4" is **measured, not estimated** —
+batch=8 OOMed on the first long-prompt batch with study-A-fit
+(78 GB peak on a 80 GB H100 even with `expandable_segments`).
+Re-derived memory budget for H100 80GB + Qwen3-30B-A3B bf16
+against study-A-fit (8k-token docs, ~13k-token full contexts):
+
+- Weights: **~61 GB** on-device (30.5B params × 2 bytes; all
+  loaded — only the active 3.3B compute per token, but routing
+  needs the full table resident).
+- KV cache per sequence at 13k context: 48 layers × 4 KV heads ×
+  128 dim × 2 (K+V) × 2 bytes (bf16) × 13000 tokens ≈ **~1.3 GB**.
+- Activations + transient prefill buffers (SDPA chunks the
+  attention-score matrix but intermediate buffers still scale
+  with B × seq²): **~2-4 GB**.
+- PyTorch caching-allocator fragmentation: **~1-3 GB**.
+- batch=4 peaks ≈ 61 + 5.2 + 4 + 2 ≈ **~72 GB** with ~8 GB
+  headroom on H100 80GB.
+- batch=8 peaks ≈ 61 + 10.4 + 6 + 2 ≈ **~79 GB** → OOM.
+
+study-B-overflow (≥16k-token docs) drops to batch=2 by override.
+
+**`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`** is exported
+on the Run:AI submit. The PyTorch caching allocator otherwise
+holds fragmented blocks across batches; expandable_segments lets
+the allocator return memory to the pool between batches and
+materially reduces sustained-VRAM-usage drift on long-running
+inference loops. Recommended in PyTorch's
+``Memory Management`` docs (linked in upstream refs below);
+free-of-charge change.
+
+**OOM-aware fallback.** A `CUDA out of memory` raised inside the
+batched `generate_fn` does NOT immediately mark the batch as api
+errors. Instead the run loop empties the CUDA cache and retries
+each prompt as a single-job call — at batch=1 the model + a single
+13k-token context fits comfortably (~62 GB on H100 80GB), so most
+OOMed batches recover. `_is_oom()` matches both the modern
+`torch.cuda.OutOfMemoryError` subclass and legacy
+`RuntimeError("CUDA out of memory ...")` strings. Sustained OOMs
+still eat wallclock — the WARNING line that prints on each
+fallback recommends lowering `--batch-size` for the next run.
+
+Concurrency stays at one inflight `generate` call (no
+asyncio.gather): the GPU is the bottleneck so the lever is
+**batch_size**, not parallel inflight calls. Parse retries on a
+single bad row in a batch are run as **single-job** retries (not
+re-running the whole batch) — wastes ~1 prompt of compute per
+parse failure rather than ~B.
+
+**Hardware default — `h100` node pool.**
+`runai-submit-query-generate-local` overrides `RUNAI_NODE_POOL`
+(default `a100`) to `h100` via target-specific variable
+assignment. Reasoning: A100 40GB OOMs on the bf16 weights alone
+(60 GB > 40 GB); A100 80GB fits but only at small batch sizes;
+H100 80GB is the smallest GPU that comfortably fits batch=8 at
+10k context, and that's what makes the wallclock ~30–60 min
+instead of ~2 h.
+
+We do **not** pin a specific GPU product (`--node-type
+NVIDIA-H100-80GB-HBM3`). RCP enforces a
+`restrict-nodename-runai-workloads` policy that rejects
+`--node-type` and requires `--node-pools` for GPU selection. The
+`h100` pool carries H100 80GB + H200 141GB; both fit batch=8, so
+node-pool routing alone is the right granularity. The `RUNAI_GPU_TYPE`
+knob remains in the Makefile (some clusters allow nodeType
+selection), but on RCP it should be left unset — the
+`make help` output now flags this. Override on the make command
+line if H100 capacity is tight (`RUNAI_NODE_POOL=default
+QGL_BATCH_SIZE=4`); only safe on the A100 80GB nodes within
+"default", not 40GB.
 
 **Common helpers.** `query_generate_local.py` imports the prompt
 builders (`build_system_prompt`, `build_user_message`), the schema
@@ -437,10 +511,35 @@ deterministic environment" rather than throughput.
   Run:AI submission layer's job, not the script's. Submit two
   query-generate-local jobs over disjoint corpus shards if you need
   it.
-- **Batched generation (`batch_size > 1`).** Not implemented at v1
-  to match the user's "be as simple as possible" directive; the
-  tokenizer is already configured `padding_side="left"` so adding
-  batched generation later is a small mechanical change.
+- **A100 as the default GPU.** Rejected on initial wallclock math:
+  60 GB bf16 weights leave ~20 GB on A100 80GB for KV cache, which
+  caps batch_size at ~4 for 10k contexts. H100 80GB at batch=8
+  roughly halves wallclock for the same job count, with the
+  same image. A100 80GB stays available as a CLI override
+  (`RUNAI_NODE_POOL=default RUNAI_GPU_TYPE=NVIDIA-A100-80GB
+  QGL_BATCH_SIZE=4`) for periods when H100 capacity is tight.
+- **Continuous batching (vLLM-style).** Strictly faster than
+  static batched generation when output lengths vary widely —
+  finished sequences are evicted and replaced with new ones mid-
+  decode rather than all sequences in a batch waiting for the
+  slowest. But requires either vLLM's PagedAttention engine or a
+  hand-rolled inflight-batching loop on top of HF transformers,
+  both of which add real complexity. Static batching at B=8
+  recovers most of the throughput at a fraction of the code.
+  Promote if a future study run shows >2× wallclock skew between
+  fastest and slowest job in a batch.
+
+**Throughput diagnostics (real run, study-A-fit @ batch=4 H100 80GB).** First 50 batches landed at avg=42 s/batch → ETA ~10 h for 900 batches. Decomposition (decode at ~300 tok/s × 1500 cap = ~5 s; prefill at ~2300 tok/s × 13 k tokens × 4 prompts = ~22 s ⇒ ~10.5 s/job): roughly 50/50 prefill / decode. Levers ranked by ROI:
+
+1. **Length-sorted batching** (landed). Sorts jobs by descending doc length before chunking into batches so each batch packs similar-length prompts and minimises left-padding waste during prefill. Stable sort: same-length jobs keep their `_plan_jobs` order so the unit-test shape (single-record corpora) is unaffected. Real runs land queries in length-descending order; downstream eval keys on `query_id`, so insertion order is not part of the contract. Expected ~10–20 % wallclock save.
+
+2. **Lower `--max-output-tokens`** (operator knob). 1500 was set as a hedge against truncated long-quote JSON; a real run with `api_errors=0` says the model isn't hitting the cap. Try `QUERY_GEN_LOCAL_ARGS="--max-output-tokens 800"` and watch `api_errors` — at 800 the decode budget halves on the slowest-in-batch path, ~20–25 % wallclock save. If `api_errors > 0` increases materially, raise to 1000 and bisect.
+
+3. **`flash_attention_2` instead of SDPA** (Dockerfile change). PyTorch's SDPA dispatches to FA2 internally on bf16 + Hopper, but only for "supported shapes"; Qwen3-MoE GQA + variable padding sometimes trips the dispatch onto a slower fallback. Adding `flash-attn` to the Dockerfile (already flagged as a follow-up at `Dockerfile:60-67`) and switching the CaaS default to `--attention flash_attention_2` saves ~30 % on prefill. Net wallclock ~10–15 % since prefill is half the budget. Open item OC1 (already listed below).
+
+4. **AWQ-quantised weights** (`stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ`). INT4 weights ≈ 15 GB instead of 60 GB; decode is memory-bandwidth bound, INT4 ≈ 2–3× faster. New runtime dep (`autoawq`), different model path. Quality regression vs bf16 needs a sanity check on the reference-verification rate. Estimated ~50 % total wallclock save. Open item OC5.
+
+5. **vLLM offline mode** (`vllm.LLM(...).generate(...)`). Continuous batching + paged attention; finished sequences are evicted mid-decode rather than the whole batch waiting for the slowest. ~3–5× total throughput on variable-output-length workloads. Big architectural change — separate inference engine, transitive deps, prompt-batching shape rewrite. Open item OC6.
 
 **Open items** (CaaS-specific):
 
@@ -454,6 +553,34 @@ deterministic environment" rather than throughput.
 - **OC3 — parse-failure rate sanity check.** Log the
   retry-attempts distribution per run; if >5% of jobs need
   retries, evaluate `outlines` (OC2 above).
+- **OC4 — `device_map="auto"` (needs `accelerate`).** v1 uses
+  explicit `model.to("cuda")` after `from_pretrained` because
+  `device_map=` triggers transformers' "requires `accelerate`"
+  guard, and the NGC pytorch:25.03 image doesn't bundle
+  `accelerate`. Two-step CPU→GPU placement costs a transient ~2×
+  peak host RAM on load (60 GB for Qwen3-30B in bf16; the Run:AI
+  pod swallows it). Add `accelerate` to deps + the Dockerfile and
+  flip back to `device_map="auto"` once we want direct-to-GPU
+  load — particularly relevant if a future CaaS run uses a model
+  that doesn't fit in host RAM.
+- **OC5 — AWQ-quantised model path.** Switch to
+  `stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ` (or the equivalent
+  GPTQ variant). Adds `autoawq` runtime dep. INT4 weights cut
+  decode bandwidth ≈ 4× and total VRAM ≈ 4×, lifting the
+  practical batch-size ceiling. Needs a sanity check on the
+  reference-verification rate vs bf16 — quantisation rounding
+  shifts the output distribution and the verbatim-anchor protocol
+  is unforgiving of even single-character drift. Promote when the
+  bf16 wallclock starts blocking study turnaround.
+- **OC6 — vLLM offline mode.** Replace
+  `transformers.AutoModelForCausalLM.generate` with
+  `vllm.LLM(model=...).generate(prompts, sampling_params)` for
+  continuous batching + paged attention. ~3–5× throughput on
+  variable-output workloads. Requires a separate inference-engine
+  dep (vLLM has its own transitive `xformers`/`triton` pins that
+  may conflict with NGC pytorch:25.03), and the prompt-dispatch
+  shape becomes "list of B prompts" rather than per-batch chunked.
+  Promote when AWQ alone isn't enough.
 
 ## Reproducing
 
@@ -509,5 +636,9 @@ uv run impresso-research-query-generate-local \
   recommended sampling settings (`temperature=0.7`, `top_p=0.8`,
   `top_k=20`) and the minimum `transformers>=4.51.0` pin used by
   the CaaS variant.
+- PyTorch CUDA Memory Management docs —
+  https://pytorch.org/docs/stable/notes/cuda.html#environment-variables —
+  rationale for `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+  on long-running inference loops with variable-length inputs.
 - EPFL RCP AIaaS docs (internal portal,
   `https://inference.rcp.epfl.ch/v1` endpoint).

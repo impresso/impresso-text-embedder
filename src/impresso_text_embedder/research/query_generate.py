@@ -74,12 +74,70 @@ DEFAULT_POSITION_BUCKETS: tuple[str, ...] = ("head", "mid", "tail")
 DEFAULT_QUERIES_PER_BUCKET: int = 1
 QUERY_TYPES: tuple[QueryType, QueryType] = ("question", "topical-phrase")
 
+# Above this many characters, the FULL ARTICLE block is dropped from
+# build_user_message and only the FOCUS REGION is sent. Rule 1 of the
+# system prompt already constrains the query to the focus region, so the
+# full article is soft context (only useful for the "fact specific to
+# this region" check). On long-doc studies (study-B-overflow, 16–60k
+# tokens / ~64–240k chars) keeping it doubled the prompt and timed out
+# the EPFL endpoint at the 120 s default. ~32 k chars ≈ the embedder's
+# 8190-token context at fr/de chars-per-token — the project's natural
+# cutoff between "fits in one shot" and "long".
+_INCLUDE_FULL_ARTICLE_CHAR_LIMIT: int = 32_000
+
 _LG_DISPLAY: dict[str, str] = {
     "fr": "French",
     "de": "German",
     "lb": "Luxembourgish",
     "it": "Italian",
     "en": "English",
+}
+
+
+# In-language few-shot exemplars anchor search-bar style (compound nouns
+# in DE, accent-stripped keyword strings in FR) that English-only
+# instructions tend to miss. Rules stay in English so instruction
+# compliance doesn't degrade; only the example flips to the target
+# language. lb falls back to fr (see ``build_system_prompt``) — Qwen3
+# lb-instruction-following is weaker than its lb-generation, and lb
+# users frequently search in fr anyway. it/en have no exemplar today.
+_EXEMPLARS: dict[str, dict[QueryType, str]] = {
+    "fr": {
+        "question": (
+            "Example output (do not copy; learn the style — note the "
+            "interrogative form ending with '?', and the capitalised "
+            "place name 'Berne'):\n"
+            '{"query": "Comment Berne a-t-elle révisé sa constitution '
+            'cantonale en 1846 ?", '
+            '"references": ["la constitution cantonale fut adoptée '
+            'par 34,079 citoyens contre 1,257 rejetants"]}'
+        ),
+        "topical-phrase": (
+            "Example output (do not copy; learn the style — short "
+            "keyword phrase, lowercase common nouns, capitalised "
+            "proper noun 'Berne'):\n"
+            '{"query": "révision constitution cantonale Berne 1846", '
+            '"references": ["constitution cantonale révisée"]}'
+        ),
+    },
+    "de": {
+        "question": (
+            "Example output (do not copy; learn the style — note the "
+            "interrogative form ending with '?', and the capitalised "
+            "place name 'Bern'; German common nouns are also "
+            "capitalised):\n"
+            '{"query": "Wie hat Bern 1846 seine Kantonsverfassung '
+            'revidiert?", '
+            '"references": ["die Kantonsverfassung wurde 1846 von '
+            '34 079 Bürgern angenommen"]}'
+        ),
+        "topical-phrase": (
+            "Example output (do not copy; learn the style — German "
+            "nouns capitalised per German convention):\n"
+            '{"query": "Revision Kantonsverfassung Bern 1846", '
+            '"references": ["neue Kantonsverfassung"]}'
+        ),
+    },
 }
 
 
@@ -263,46 +321,108 @@ def bucket_ranges(total_chars: int, n: int = 3) -> tuple[tuple[int, int], ...]:
 _BASE_RULES = (
     "Rules:\n"
     "1. The query must be answerable from the FOCUS REGION below; do not\n"
-    "   draw on content from outside the focus region.\n"
+    "   draw on content from outside the focus region. Where the same\n"
+    "   fact also appears outside the focus region, prefer a fact that\n"
+    "   is specific to the focus region.\n"
     "2. Provide 1 to 3 short references — verbatim substrings of the\n"
-    "   article that support the answer. Each reference must appear in\n"
-    "   the article EXACTLY as written: same casing, same punctuation,\n"
-    "   same archaic spelling, same OCR artefacts. Do not modernise,\n"
-    "   paraphrase, fix typos, or skip across hyphenation.\n"
+    "   article that support the answer. Aim for non-overlapping,\n"
+    "   non-adjacent spans, each at most ~180 characters (one or two\n"
+    "   short sentences). Each reference must appear in the article\n"
+    "   EXACTLY as written: same casing, same punctuation, same archaic\n"
+    "   spelling, same OCR artefacts. Do not modernise, paraphrase,\n"
+    "   fix typos, or skip across hyphenation.\n"
     "3. The query must be in {language}.\n"
-    "4. Reply with a single JSON object matching the requested schema."
+    "4. Reply with EXACTLY this JSON shape and no other keys:\n"
+    '   {{"query": "<the {language} query>", '
+    '"references": ["<verbatim span 1>", "<verbatim span 2>"]}}'
 )
 
 
-def build_system_prompt(query_type: QueryType, lg: str) -> str:
+def build_system_prompt(
+    query_type: QueryType, lg: str, sample_idx: int = 0
+) -> str:
     language = _LG_DISPLAY.get(lg, "English")
     if query_type == "question":
         intro = (
             "You write retrieval-evaluation queries for a historical "
             "newspaper archive. Given a long article and a focus region "
-            "inside it, write one realistic question a researcher might "
-            "type into the archive's search bar to find this article."
+            "inside it, write ONE realistic question (at most 20 "
+            "words) a researcher would type to find this article "
+            "WITHOUT having read it yet. The query MUST be a real "
+            "question: start with an interrogative word (\"comment\", "
+            "\"qu'est-ce que\", \"quel\", \"où\", \"quand\", \"wie\", "
+            "\"was\", \"warum\", \"wer\", \"how\", \"what\", etc.) "
+            "and end with a question mark. Do NOT emit a keyword "
+            "string — that is the topical-phrase type, not this one. "
+            "Do not refer to the article (\"selon l'article\", "
+            "\"according to the article\", \"laut dem Artikel\"). Do "
+            "not name a person, place, or date unless they are widely "
+            "known at public-history level — never a name introduced "
+            "only inside the article. Where natural, paraphrase the "
+            "topic instead of copying multi-word phrases verbatim "
+            "from the focus region."
         )
     elif query_type == "topical-phrase":
         intro = (
             "You write retrieval-evaluation queries for a historical "
-            "newspaper archive. Given a long article and a focus region "
-            "inside it, write one short topical search phrase (3 to 8 "
-            "words, no question mark) a researcher might use to find "
-            "this article — the kind of keyword string a historian "
-            "actually types, not a full sentence."
+            "newspaper archive. Given a long article and a focus "
+            "region inside it, write ONE topical search phrase (3 to "
+            "6 keywords, no question mark, no leading function words "
+            "like \"le \", \"la \", \"pas de \", \"des \", \"the \"). "
+            "Keywords only — no full clauses or sentences. Use "
+            "natural capitalisation for the target language: "
+            "capitalise place names (\"Berne\", \"Afrique\", "
+            "\"Italie\"), person names (\"Strickland\"), and country "
+            "names; lowercase common nouns in French and Italian; in "
+            "German, common nouns are also capitalised per German "
+            "convention. Avoid named individuals unless widely known "
+            "at public-history level. Where natural, paraphrase the "
+            "topic instead of copying multi-word phrases verbatim "
+            "from the focus region."
         )
     else:
         raise ValueError(f"unknown query_type: {query_type!r}")
-    return intro + "\n\n" + _BASE_RULES.format(language=language)
+
+    # lb routes through the FR exemplar (see _EXEMPLARS comment); other
+    # languages either find their own exemplar or fall through with rules
+    # only — same behaviour as before plus the rule tightening.
+    exemplar_lg = "fr" if lg == "lb" else lg
+    exemplar = _EXEMPLARS.get(exemplar_lg, {}).get(query_type)
+    parts = [intro, _BASE_RULES.format(language=language)]
+    if exemplar is not None:
+        parts.append(exemplar)
+    return "\n\n".join(parts)
 
 
-def build_user_message(record: CorpusRecord, bucket_label: str, bucket_text: str) -> str:
+def build_user_message(
+    record: CorpusRecord,
+    bucket_label: str,
+    bucket_text: str,
+    sample_idx: int = 0,
+) -> str:
+    diversity = ""
+    if sample_idx > 0:
+        diversity = (
+            f"\n\nThis is sample {sample_idx + 1}. Choose a different "
+            f"angle and different supporting facts than would be the "
+            f"obvious first choice."
+        )
+    blocks = [
+        f"FOCUS REGION ({bucket_label} of the article):\n"
+        f"---\n{bucket_text}\n---"
+    ]
+    if len(record.ft) <= _INCLUDE_FULL_ARTICLE_CHAR_LIMIT:
+        blocks.append(f"FULL ARTICLE:\n---\n{record.ft}\n---")
     return (
-        f"FOCUS REGION ({bucket_label} third of the article):\n"
-        f"---\n{bucket_text}\n---\n\n"
-        f"FULL ARTICLE:\n---\n{record.ft}\n---\n\n"
-        "Return the JSON object now."
+        "\n\n".join(blocks)
+        + diversity
+        + "\n\n"
+        + f"Pick a SPECIFIC fact from the {bucket_label} focus region "
+        + "(a number, a named development, a particular event) — not "
+        + "the article's overall theme — so the query is distinctive "
+        + "to this region and would not equally fit a different "
+        + "region of the same article.\n\n"
+        + "Return the JSON object now."
     )
 
 
@@ -451,10 +571,17 @@ async def generate_one(job: Job, cfg: GenerationConfig, llm: Any) -> JobResult:
     verbatim inside the source bucket.
     """
     messages = [
-        {"role": "system", "content": build_system_prompt(job.query_type, job.record.lg)},
+        {
+            "role": "system",
+            "content": build_system_prompt(
+                job.query_type, job.record.lg, job.sample_idx
+            ),
+        },
         {
             "role": "user",
-            "content": build_user_message(job.record, job.bucket_label, job.bucket_text),
+            "content": build_user_message(
+                job.record, job.bucket_label, job.bucket_text, job.sample_idx
+            ),
         },
     ]
 
