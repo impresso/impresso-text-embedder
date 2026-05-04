@@ -234,8 +234,8 @@ def test_resolve_chunk_tokens_precedence():
 def test_parser_rejects_unknown_long_doc_aggregation():
     import pytest
 
-    # Only 'mean' is implemented today; additional choices are added as they
-    # ship. argparse should reject anything else.
+    # 'mean', 'max', 'first-chunk', and 'length-weighted' are the registered
+    # choices today; argparse should reject anything else.
     with pytest.raises(SystemExit):
         create_cli.build_parser().parse_args(
             [
@@ -246,7 +246,7 @@ def test_parser_rejects_unknown_long_doc_aggregation():
                 "--output-bucket",
                 "o",
                 "--long-doc-aggregation",
-                "max",
+                "not-a-real-strategy",
             ]
         )
 

@@ -80,9 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["ar", "page"],
         help="keep only records whose 'tp' field is in this allow-list",
     )
-    # Long-document handling at --embedding-level=text. Partial landing:
-    # only the ``chunk`` strategy with ``mean`` aggregation is wired today.
-    # See .history/long-doc-chunking/notes.md for the full design space
+    # Long-document handling at --embedding-level=text. See
+    # .history/long-doc-chunking/notes.md for the full design space
     # and the list of deferred strategies.
     p.add_argument(
         "--long-doc-strategy",
@@ -93,8 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--embedding-level=text. 'chunk' (default): split into ≤"
             "--long-doc-chunk-tokens chunks, encode each, and aggregate via "
             "--long-doc-aggregation. 'truncate': let the tokenizer drop the "
-            "tail (legacy behaviour, pre-step-16). Only "
-            "--long-doc-aggregation=mean is implemented today."
+            "tail (legacy behaviour, pre-step-16)."
         ),
     )
     p.add_argument(
@@ -111,12 +109,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--long-doc-aggregation",
-        # Only 'mean' is landed; additional strategies (max, length-weighted,
-        # first-chunk, …) are registered in impresso_text_embedder.aggregation
-        # as they ship.
-        choices=["mean"],
+        # Strategies live in impresso_text_embedder.aggregation; new ones
+        # land by adding a module + register_strategy line + a choice here.
+        choices=["mean", "max", "first-chunk", "length-weighted"],
         default="mean",
-        help="how to combine chunk embeddings into one document vector when --long-doc-strategy=chunk",
+        help=(
+            "how to combine chunk embeddings into one document vector when "
+            "--long-doc-strategy=chunk. 'mean' (default): unweighted mean + "
+            "L2 renorm. 'max': per-dim max + L2 renorm. 'first-chunk': "
+            "lead chunk only (A/B baseline). 'length-weighted': mean weighted "
+            "by per-chunk token count + L2 renorm."
+        ),
     )
 
     # Numerical-ablation toggles. Defaults preserve the historical fast path

@@ -12,9 +12,10 @@ tokenizer by default. When :attr:`EncoderConfig.long_doc` is configured
 with ``strategy="chunk"``, :class:`TextBatcher` instead chunks the
 document, encodes the chunks alongside other pending texts in the same
 batched ``model.encode`` call, and aggregates the resulting K vectors
-into one document vector via the configured aggregation strategy. Only
-**mean pool + L2 renormalise** is registered today; other strategies
-plug in via the :mod:`impresso_text_embedder.aggregation` registry.
+into one document vector via the configured aggregation strategy
+(``mean``, ``max``, ``first-chunk``, or ``length-weighted``; new
+strategies plug in via the :mod:`impresso_text_embedder.aggregation`
+registry).
 """
 
 from __future__ import annotations
@@ -380,15 +381,21 @@ class TextBatcher:
         """Return the single vector for pending item ``p``.
 
         Short doc (one text): pass through. Long doc (K texts): aggregate
-        via the configured aggregator. The aggregator contract is that
-        output is a 1-D ``[D]`` unit vector.
+        via the configured aggregator, passing per-chunk token counts as
+        ``weights`` (consumed by length-weighted strategies, ignored by
+        the rest). The aggregator contract is that output is a 1-D
+        ``[D]`` unit vector.
         """
         if p.n_texts == 1:
             return piece[0]
-        assert self._cfg.long_doc is not None
-        aggregator = self._cfg.long_doc.aggregator
+        long = self._cfg.long_doc
+        assert long is not None
+        aggregator = long.aggregator
         assert aggregator is not None  # LongDocConfig.is_active() guarantees
-        return aggregator.aggregate(piece)
+        token_counter = long.token_counter
+        assert token_counter is not None  # is_active() guarantees
+        weights = [token_counter(t) for t in p.texts]
+        return aggregator.aggregate(piece, weights=weights)
 
 
 # ---------------------------------------------------------------------------
