@@ -98,16 +98,16 @@ class TestGroupBySource:
         assert set(first_group.keys()) == {"a", "b"}
 
 
-class TestBuildOutputRecord:
+class TestCorpusRecordFromManifest:
     def test_uses_record_ft_when_present(self):
         entry = corpus_fetch.ManifestEntry.from_dict(_entry(ci_id="a"))
         rec = {"id": "a", "tp": "ar", "ft": "Hello world.", "sents": [{"tok": []}]}
-        out, reconstructed = corpus_fetch._build_output_record(entry, rec)
-        assert out["ft"] == "Hello world."
-        assert out["sents"] == [{"tok": []}]
-        assert out["tp"] == "ar"
-        assert out["lg"] == "fr"
-        assert out["provider"] == "BNF"
+        out, reconstructed = corpus_fetch.CorpusRecord.from_manifest(entry, rec)
+        assert out.ft == "Hello world."
+        assert out.sents == [{"tok": []}]
+        assert out.tp == "ar"
+        assert out.lg == "fr"
+        assert out.provider == "BNF"
         assert reconstructed is False
 
     def test_reconstructs_ft_from_offsets(self):
@@ -119,21 +119,23 @@ class TestBuildOutputRecord:
                 {"tok": [{"t": "Hello", "o": 0}, {"t": "world", "o": 6}]},
             ],
         }
-        out, reconstructed = corpus_fetch._build_output_record(entry, rec)
-        assert out["ft"] == "Hello world"
+        out, reconstructed = corpus_fetch.CorpusRecord.from_manifest(entry, rec)
+        assert out.ft == "Hello world"
         assert reconstructed is True
 
     def test_passes_lingproc_path_when_present(self):
         entry = corpus_fetch.ManifestEntry.from_dict(_entry(ci_id="a"))
         rec = {"id": "a", "tp": "ar", "ft": "x", "lingproc_path": "s3://x/y"}
-        out, _ = corpus_fetch._build_output_record(entry, rec)
-        assert out["lingproc_path"] == "s3://x/y"
+        out, _ = corpus_fetch.CorpusRecord.from_manifest(entry, rec)
+        assert out.lingproc_path == "s3://x/y"
+        assert out.to_jsonable()["lingproc_path"] == "s3://x/y"
 
     def test_omits_lingproc_path_when_absent(self):
         entry = corpus_fetch.ManifestEntry.from_dict(_entry(ci_id="a"))
         rec = {"id": "a", "tp": "ar", "ft": "x"}
-        out, _ = corpus_fetch._build_output_record(entry, rec)
-        assert "lingproc_path" not in out
+        out, _ = corpus_fetch.CorpusRecord.from_manifest(entry, rec)
+        assert out.lingproc_path is None
+        assert "lingproc_path" not in out.to_jsonable()
 
 
 class TestFetchCorpus:

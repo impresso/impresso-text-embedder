@@ -53,10 +53,13 @@ import numpy as np
 import orjson
 
 from impresso_text_embedder import io as s3io
+from impresso_text_embedder.research.corpus_fetch import CorpusRecord
 from impresso_text_embedder.research.scenario_builder import ScenarioRegistry
 from impresso_text_embedder.research.scenarios import Scenario
 from impresso_text_embedder.research.study_config import (
+    CORPUS_FILENAME,
     QUERIES_EMBEDDED_FILENAME,
+    QUERIES_FILENAME,
     StudyConfig,
     scenario_filename,
 )
@@ -223,6 +226,11 @@ def _to_query_row(rec: dict) -> QueryRow:
         embedding=embedding,
     )
 
+def load_corpus(study_cfg: StudyConfig, *, force: bool = False) -> list[CorpusRecord]:
+    """Pull and parse the study's corpus shard into :class:`CorpusRecord`s."""
+    path = ensure_local(study_cfg, CORPUS_FILENAME, force=force)
+    return [CorpusRecord.from_dict(rec) for rec in _iter_jsonl(path)]
+
 
 def load_queries(
     study_cfg: StudyConfig, *, force: bool = False
@@ -292,6 +300,14 @@ def load_scenario_pool(
         len_chars=len_chars,
     )
 
+def load_corpus_query_mapping(study_cfg: StudyConfig, *, force: bool = False) -> dict[str, list[QueryRow]]:
+    """from both corpus and queries, build a good dataframe for analysis of query coverage position (bucket)
+    in order to see if the query where rightfully generated"""
+    queries = load_queries(study_cfg, force=force)
+    mapping: dict[str, list[QueryRow]] = {}
+    for query in queries:
+        mapping.setdefault(query.ci_id, []).append(query)
+    return mapping
 
 def load_eval_inputs(
     study_cfg: StudyConfig,
@@ -984,6 +1000,7 @@ __all__ = [
     "bootstrap_ci",
     "cosine_scores",
     "ensure_local",
+    "load_corpus",
     "load_eval_inputs",
     "load_queries",
     "load_scenario_pool",

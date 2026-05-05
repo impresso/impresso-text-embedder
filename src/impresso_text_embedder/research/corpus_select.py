@@ -131,6 +131,20 @@ class ManifestEntry:
     rebuilt_bucket: str
     rebuilt_key: str
 
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> ManifestEntry:
+        return cls(
+            ci_id=raw["ci_id"],
+            lg=raw["lg"],
+            year=int(raw["year"]),
+            len_chars=int(raw["len_chars"]),
+            ocrqa=float(raw["ocrqa"]),
+            provider=raw["provider"],
+            alias=raw["alias"],
+            rebuilt_bucket=raw["rebuilt_bucket"],
+            rebuilt_key=raw["rebuilt_key"],
+        )
+
     def to_jsonable(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
 

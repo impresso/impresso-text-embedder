@@ -45,6 +45,7 @@ from tqdm import tqdm
 
 from impresso_text_embedder import io as s3io
 from impresso_text_embedder.research._io import staged_output
+from impresso_text_embedder.research.corpus_select import ManifestEntry
 from impresso_text_embedder.research.study_config import (
     CORPUS_FILENAME,
     MANIFEST_FILENAME,
@@ -65,38 +66,94 @@ DEFAULT_MAX_WORKERS: int = 16
 
 
 @dataclasses.dataclass(frozen=True)
-class ManifestEntry:
-    """One row from ``corpus-manifest.jsonl``.
+class CorpusRecord:
+    """One row of the materialised corpus shard.
 
-    Mirrors :class:`research.corpus_select.ManifestEntry` but defined locally
-    so this module can be invoked against any manifest file without depending
-    on the selector's import path. Fields not present in the manifest are
-    tolerated (we only require the ones we actually use).
+    The shape every downstream consumer (``embed_sweep``, ``query_generate``,
+    ``eval.load_corpus``) reads back from ``corpus.jsonl.bz2``. Construction
+    paths: :meth:`from_manifest` for the fetch-time merge of manifest metadata
+    + rebuilt payload, :meth:`from_dict` for replay from the on-disk shard.
     """
 
     ci_id: str
     lg: str
     year: int
-    len_chars: int
-    ocrqa: float
     provider: str
     alias: str
-    rebuilt_bucket: str
-    rebuilt_key: str
+    len_chars: int
+    ocrqa: float
+    tp: str | None
+    ft: str
+    sents: list[Any] | None
+    lingproc_path: str | None = None
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> ManifestEntry:
-        return cls(
-            ci_id=raw["ci_id"],
-            lg=raw["lg"],
-            year=int(raw["year"]),
-            len_chars=int(raw["len_chars"]),
-            ocrqa=float(raw["ocrqa"]),
-            provider=raw["provider"],
-            alias=raw["alias"],
-            rebuilt_bucket=raw["rebuilt_bucket"],
-            rebuilt_key=raw["rebuilt_key"],
+    def from_manifest(
+        cls, entry: ManifestEntry, rebuilt: dict[str, Any]
+    ) -> tuple[CorpusRecord, bool]:
+        """Combine manifest metadata with a rebuilt record.
+
+        Returns ``(record, ft_was_reconstructed)``. ``ft`` falls back to
+        :func:`text.rebuild_ft_from_offsets` when the rebuilt record does not
+        carry a precomputed full-text — same helper and same byte-for-byte
+        semantics as the production pipeline. ``sents`` is preserved so
+        downstream sentence-aware chunkers can use the existing tokenisation
+        rather than re-splitting.
+        """
+        ft = rebuilt.get("ft")
+        reconstructed = False
+        if not ft:
+            ft = rebuild_ft_from_offsets(rebuilt.get("sents", []) or [])
+            reconstructed = True
+        return (
+            cls(
+                ci_id=entry.ci_id,
+                lg=entry.lg,
+                year=entry.year,
+                provider=entry.provider,
+                alias=entry.alias,
+                len_chars=entry.len_chars,
+                ocrqa=entry.ocrqa,
+                tp=rebuilt.get("tp"),
+                ft=ft,
+                sents=rebuilt.get("sents"),
+                lingproc_path=rebuilt.get("lingproc_path"),
+            ),
+            reconstructed,
         )
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> CorpusRecord:
+        return cls(
+            ci_id=str(raw["ci_id"]),
+            lg=str(raw.get("lg") or ""),
+            year=int(raw["year"]),
+            provider=str(raw.get("provider") or ""),
+            alias=str(raw.get("alias") or ""),
+            len_chars=int(raw.get("len_chars") or 0),
+            ocrqa=float(raw.get("ocrqa") or 0.0),
+            tp=raw.get("tp"),
+            ft=str(raw.get("ft") or ""),
+            sents=raw.get("sents"),
+            lingproc_path=raw.get("lingproc_path"),
+        )
+
+    def to_jsonable(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "ci_id": self.ci_id,
+            "lg": self.lg,
+            "year": self.year,
+            "provider": self.provider,
+            "alias": self.alias,
+            "len_chars": self.len_chars,
+            "ocrqa": self.ocrqa,
+            "tp": self.tp,
+            "ft": self.ft,
+            "sents": self.sents,
+        }
+        if self.lingproc_path is not None:
+            out["lingproc_path"] = self.lingproc_path
+        return out
 
 
 @dataclasses.dataclass
@@ -137,47 +194,11 @@ def _group_by_source(
     return groups
 
 
-def _build_output_record(
-    entry: ManifestEntry,
-    rebuilt: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
-    """Combine manifest metadata with the rebuilt record's payload.
-
-    Returns ``(record, ft_was_reconstructed)``. ``ft`` falls back to
-    :func:`text.rebuild_ft_from_offsets` when the rebuilt record does not
-    carry a precomputed full-text — same helper and same byte-for-byte
-    semantics as the production pipeline (``text.rebuild_ft_from_offsets``).
-    ``sents`` is preserved on the way through so downstream sentence-aware
-    chunkers can use the existing tokenisation rather than re-splitting.
-    """
-    ft = rebuilt.get("ft")
-    reconstructed = False
-    if not ft:
-        ft = rebuild_ft_from_offsets(rebuilt.get("sents", []) or [])
-        reconstructed = True
-    out: dict[str, Any] = {
-        "ci_id": entry.ci_id,
-        "lg": entry.lg,
-        "year": entry.year,
-        "provider": entry.provider,
-        "alias": entry.alias,
-        "len_chars": entry.len_chars,
-        "ocrqa": entry.ocrqa,
-        "tp": rebuilt.get("tp"),
-        "ft": ft,
-        "sents": rebuilt.get("sents"),
-    }
-    lingproc_path = rebuilt.get("lingproc_path")
-    if lingproc_path is not None:
-        out["lingproc_path"] = lingproc_path
-    return out, reconstructed
-
-
 def _fetch_one_file(
     bucket: str,
     key: str,
     wanted: dict[str, ManifestEntry],
-) -> dict[str, tuple[dict[str, Any], bool]]:
+) -> dict[str, tuple[CorpusRecord, bool]]:
     """Stream one rebuilt shard and pick out the manifest's ci_ids.
 
     Returns ``{ci_id: (output_record, ft_reconstructed)}``. The shard is
@@ -193,7 +214,7 @@ def _fetch_one_file(
     file, where multipart wins; for the long-doc-corpus assembly we
     actively want the opposite trade-off.
     """
-    found: dict[str, tuple[dict[str, Any], bool]] = {}
+    found: dict[str, tuple[CorpusRecord, bool]] = {}
     remaining = set(wanted)
     for line in s3io.iter_jsonl_bz2(bucket, key):
         if not remaining:
@@ -205,8 +226,7 @@ def _fetch_one_file(
         ci_id = rec.get("id")
         if not isinstance(ci_id, str) or ci_id not in remaining:
             continue
-        out, reconstructed = _build_output_record(wanted[ci_id], rec)
-        found[ci_id] = (out, reconstructed)
+        found[ci_id] = CorpusRecord.from_manifest(wanted[ci_id], rec)
         remaining.discard(ci_id)
     return found
 
@@ -243,7 +263,7 @@ def fetch_corpus(
         max_workers,
     )
 
-    fetched: dict[str, tuple[dict[str, Any], bool]] = {}
+    fetched: dict[str, tuple[CorpusRecord, bool]] = {}
     with ThreadPoolExecutor(
         max_workers=max(1, max_workers), thread_name_prefix="corpus-fetch"
     ) as pool:
@@ -288,7 +308,7 @@ def fetch_corpus(
                 stats.ft_reconstructed += 1
             else:
                 stats.ft_from_record += 1
-            fh.write(orjson.dumps(record, option=orjson.OPT_APPEND_NEWLINE))
+            fh.write(orjson.dumps(record.to_jsonable(), option=orjson.OPT_APPEND_NEWLINE))
             stats.written += 1
     return stats
 

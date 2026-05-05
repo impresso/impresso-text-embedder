@@ -46,5 +46,5 @@ scenarios:
   # Order: S0=truncate-8192; then size-major with aggregators innermost so
   # "all aggregators at one (chunker, size) cell" is a contiguous slice.
   chunkers: [token-budget]
-  chunk_sizes: [256, 1024, 4096]
-  aggregators: [mean, max, first-chunk, length-weighted]
+  chunk_sizes: [1024, 2048, 4096]
+  aggregators: [ first-chunk, max, mean, length-weighted]
