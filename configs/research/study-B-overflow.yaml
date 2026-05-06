@@ -39,6 +39,7 @@ corpus:
 scenarios:
   # 5 sizes × 3 chunkers + 1 truncate baseline = 16 scenarios.
   chunk_sizes: [512, 1024, 2048, 4096, 8190]
+  chunkers: [fixed-window, token-budget]
 
 query_generation:
   # 16–60k-token docs make MoE prefill on the EPFL endpoint slower than

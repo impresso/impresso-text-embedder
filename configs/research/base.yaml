@@ -46,7 +46,6 @@ embed:
 
 scenarios:
   truncate_baseline: true
-  chunkers: [fixed-window, token-budget, semantic]
   aggregator: mean
   # chunk_sizes — set per study
 

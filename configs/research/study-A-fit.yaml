@@ -37,3 +37,4 @@ corpus:
 scenarios:
   # 4 sizes × 3 chunkers + 1 truncate baseline = 13 scenarios.
   chunk_sizes: [512, 1024, 2048, 4096]
+  chunkers: [fixed-window, token-budget]
