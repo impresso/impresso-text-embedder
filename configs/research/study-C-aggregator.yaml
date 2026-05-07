@@ -4,22 +4,7 @@
 # "Holding the chunker fixed at token-budget, which of the four
 # registered aggregation strategies (mean / max / first-chunk /
 # length-weighted) yields the strongest doc-level retrieval?"
-#
-# Design implications baked into this config:
-# - Reuses study-A-fit's exact corpus filters (year window, ocrqa_min,
-#   min/max_tokens, n_per_lg, providers nullified) so corpus.jsonl.bz2
-#   and queries.jsonl.bz2 from A-fit can be server-side-copied via
-#   `impresso-research-study-seed`. A-fit's queries-embedded.jsonl.bz2
-#   reuses too — same model pin, same query texts, identical vectors.
-# - 1 chunker (token-budget) × 3 sizes [256, 1024, 4096] × 4 aggregators
-#   + 1 truncate baseline = 13 scenarios. 256 is intentionally a new
-#   chunk size not present in A-fit/B-overflow — small chunks stress
-#   aggregation choice (more vectors to combine).
-# - Single-level extends: only base.yaml works (chained extends is
-#   rejected by the loader); A-fit's corpus knobs are duplicated below
-#   to guarantee identical corpus selection.
-#
-# Seed once, then sweep:
+
 #   uv run impresso-research-study-seed \
 #     --source-config configs/research/study-A-fit.yaml \
 #     --target-config configs/research/study-C-aggregator.yaml
