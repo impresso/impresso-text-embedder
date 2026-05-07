@@ -5,9 +5,6 @@
 > production embedder ships from `main`; this branch never embeds the
 > full Impresso corpus and is **not intended to merge back**.
 
-Locked scope, research question, and inherited decisions in
-[`CLAUDE.md`](./CLAUDE.md). Live ledger of work on this branch in
-[`.progress/plan.md`](./.progress/plan.md).
 
 ## Workflow
 
