@@ -24,11 +24,11 @@ corpus_select  →  corpus_fetch  ───────────────�
 Every stage reads a **single study YAML** under `configs/research/`.
 The shipped studies:
 
-| Study              | Corpus filter            | Scenarios | Question |
-| ------------------ | ------------------------ | --------- | -------- |
-| `study-v1`         | `min_tokens=4000`        | 16        | Frozen pre-refactor snapshot — regression reference. |
-| `study-A-fit`      | `4096 ≤ tokens ≤ 8192`   | 13        | Sub-context chunking vs one-shot — no-loss baseline. |
-| `study-B-overflow` | `tokens ≥ 16384`         | 16        | Of the strategies forced to do something, which loses least? |
+| Study                | Corpus filter            | Scenarios | Question |
+| -------------------- | ------------------------ | --------- | -------- |
+| `study-A-fit`        | `7000 ≤ tokens ≤ 8000`   | 13        | Sub-context chunking vs one-shot — no-loss baseline. |
+| `study-B-overflow`   | `tokens ≥ 16384`         | 16        | Of the strategies forced to do something, which loses least? |
+| `study-C-aggregator` | `7000 ≤ tokens ≤ 8000` (reuses A-fit corpus) | 13 | Holding chunker fixed at `token-budget`, which aggregator (mean / max / first-chunk / length-weighted) recovers most signal? |
 
 Schema in `src/impresso_text_embedder/research/study_config.py`.
 
@@ -46,8 +46,8 @@ test suite.
 
 ## Run a study
 
-Pick a study with `STUDY=...` (default `study-v1`). All four targets
-forward `--config configs/research/$(STUDY).yaml`.
+Pick a study with `STUDY=...`. All four targets forward
+`--config configs/research/$(STUDY).yaml`.
 
 ```bash
 # 1 — laptop / login node
@@ -79,7 +79,7 @@ verbatim-anchor verification, and write the same
 `queries.jsonl.bz2` shape — the eval step downstream cannot tell
 them apart beyond the `gen_endpoint` field on each record.
 
-| Backend                             | Where the LLM runs                                                                | Auth needed                            | Wallclock (study-v1, ~2400 generations) | When to pick                                                                                          |
+| Backend                             | Where the LLM runs                                                                | Auth needed                            | Wallclock (study-A-fit, ~3600 generations) | When to pick                                                                                          |
 | ----------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | **AIaaS** (default)                 | EPFL RCP AIaaS endpoint (`https://inference.rcp.epfl.ch/v1`, OpenAI-compatible)   | `RCP_API_KEY` in `.env`                | ~60–100 min at the 2-parallel cap       | Laptop / login-node runs; you don't need a GPU; AIaaS is up and not throttled.                        |
 | **CaaS** (`*-local` Make targets)   | Local `transformers.AutoModelForCausalLM` (bf16 + SDPA Flash-Attn-2) inside the production Run:AI image | none (model weights cached in `HF_HOME`) | ~1–2 h on a single H100 80GB at `batch_size=4` (study-A-fit) | RCP / Run:AI run that needs to be self-contained; AIaaS throttled or unavailable; reproducibility-locked study runs. |
@@ -124,7 +124,7 @@ Defaults are calibrated against measured H100 80GB peak memory:
 
 | Study | Doc tokens | `QGL_BATCH_SIZE` | Wallclock estimate |
 | --- | --- | --- | --- |
-| `study-v1` / `study-A-fit` | ≤ 8 192 | **4** (default) | ~1–2 h on study-A-fit (3600 jobs) |
+| `study-A-fit` / `study-C-aggregator` | ≤ 8 192 | **4** (default) | ~1–2 h on study-A-fit (3600 jobs); `study-C-aggregator` reuses A-fit's queries via `impresso-research-study-seed` and skips re-generation. |
 | `study-B-overflow` | ≥ 16 384 | **2** (override) | ~3–5 h |
 
 At study-A-fit (8k-token docs, ~13k-token full prompts including
@@ -159,9 +159,9 @@ include the study (`embed-sweep-A-fit-s3`).
 
 ```bash
 impresso-research-embed-sweep \
-  --config configs/research/study-v1.yaml \
+  --config configs/research/study-A-fit.yaml \
   --scenario S3 \
-  --local-corpus tmp/chunking-eval/v1/corpus.jsonl.bz2 \
+  --local-corpus tmp/chunking-eval/A-fit/corpus.jsonl.bz2 \
   --local-output tmp/S3.jsonl.bz2 \
   --no-upload
 ```
