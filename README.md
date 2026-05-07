@@ -1,8 +1,7 @@
 # impresso-text-embedder — `research/chunking-eval`
 
-> **Side-research branch.** Chunking-strategy evaluation for
-> [Impresso](https://impresso-project.ch) document embeddings. The
-> production embedder ships from `main`; this branch never embeds the
+> **Side-research branch.** Chunking-strategy evaluation for document embeddings. The
+> production embedder ships from `feat/migration-python-package`; this branch never embeds the
 > full Impresso corpus and is **not intended to merge back**.
 
 
